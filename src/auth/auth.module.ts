@@ -8,12 +8,14 @@ import { ResetToken } from './entities/reset-token.entity';
 import { EmailVerification } from './entities/email-verification.entity';
 import { MailService } from 'src/services/mail.service';
 import { GoogleAuthService } from './strategies/google.strategy';
+import { RandomNumber } from './entities/random-number-verification.entity';
+import { Interest } from './entities/interest.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([User, RefreshToken, ResetToken, EmailVerification]),
+    TypeOrmModule.forFeature([User, RefreshToken, ResetToken, EmailVerification, RandomNumber, Interest]),
   ],
   controllers: [AuthController],
   providers: [AuthService, MailService, GoogleAuthService],
 })
-export class AuthModule {}
+export class AuthModule { }

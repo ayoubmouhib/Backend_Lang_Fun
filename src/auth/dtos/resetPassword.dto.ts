@@ -1,8 +1,12 @@
 import { IsString, Matches, MinLength } from "class-validator";
 
 export class ResetPasswordDto {
+    /*
     @IsString()
     resetToken: string;
+*/
+    @IsString()
+    codenumber: string;
 
     @IsString()
     @MinLength(8, { message: 'Password Must Be Containe at Least one Number' })

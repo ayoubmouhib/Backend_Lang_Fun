@@ -1,7 +1,7 @@
-import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { SignupDto } from './dtos/signup.dto';
 import { InjectRepository } from '@nestjs/typeorm';
-import { MoreThanOrEqual, Repository } from 'typeorm';
+import { In, MoreThanOrEqual, Repository } from 'typeorm';
 import { User } from 'src/user/entities/user.entity';
 import * as bcrypt from 'bcrypt';
 import { LoginDto } from './dtos/login.dto';
@@ -14,6 +14,9 @@ import { nanoid } from 'nanoid';
 import { ResetToken } from './entities/reset-token.entity';
 import { EmailVerification } from './entities/email-verification.entity';
 import { MailService } from 'src/services/mail.service';
+import { MoreThan } from 'typeorm';
+import { RandomNumber } from './entities/random-number-verification.entity';
+import { Interest } from './entities/interest.entity';
 
 
 @Injectable()
@@ -22,69 +25,146 @@ export class AuthService {
     constructor(
         @InjectRepository(User)
         private usersRepository: Repository<User>,
+        @InjectRepository(Interest)
+        private interestsRepository: Repository<Interest>,
         @InjectRepository(RefreshToken)
         private tokenRepository: Repository<RefreshToken>,
         @InjectRepository(ResetToken)
         private tokenResetRepository: Repository<ResetToken>,
         @InjectRepository(EmailVerification)
         private emailVerificationRepository: Repository<EmailVerification>,
+        @InjectRepository(RandomNumber)
+        private randomNumberRepository: Repository<RandomNumber>,
         private jwtService: JwtService,
         private mailService: MailService,
-        
+
     ) { }
-
+    /*
+        async signup(signupData: SignupDto) {
+    
+            const { first_name, last_name, username, email, password, age, preferred_language_id } = signupData;
+    
+            //Check If Email Is in Use
+            const isEmailInUse = await this.usersRepository.findOneBy({ email: email })
+    
+            const isUserNameInUse = await this.usersRepository.findOneBy({ username: username })
+            if (isEmailInUse) {
+                throw new BadRequestException('Email Already In Use');
+            }
+    
+            if (isUserNameInUse) {
+                throw new BadRequestException('UserName Already In Use');
+            }
+    
+            //Hash Password
+            const salt = await bcrypt.genSalt(10); // for generate different hash for the same password
+            const hashpassword = await bcrypt.hash(password, salt);
+    
+    
+            //Create and Save The User in The DataBase
+            const newUser = this.usersRepository.create({
+                first_name,
+                last_name,
+                username,
+                email,
+                password: hashpassword,
+                age,
+                preferred_language_id
+            });
+    
+            await this.usersRepository.save(newUser);
+    
+            // Generate email verification token
+            const verificationToken = nanoid(64);
+            const expiryDate = new Date();
+            expiryDate.setHours(expiryDate.getHours() + 24); // expires in 24 hours
+            const salt2 = await bcrypt.genSalt(10);
+            const hashedVerificationToken = await bcrypt.hash(verificationToken, salt2);
+            const verificationEntry = this.emailVerificationRepository.create({
+                token_hash: hashedVerificationToken,
+                user_id: newUser.id,
+                expires_at: expiryDate,
+            });
+            await this.emailVerificationRepository.save(verificationEntry);
+    
+            // Send the verification email
+            await this.mailService.sendVerificationEmail(newUser.email, verificationToken);
+    
+            return { message: 'Registration successful! Please check your email to verify your account.' };
+        }
+            */
     async signup(signupData: SignupDto) {
+        try {
+            const { first_name, last_name, username, email, password, age, preferred_language_id, interest_ids  } = signupData;
 
-        const { first_name, last_name, username, email, password, age, preferred_language_id } = signupData;
+            // Check If Email Is in Use
+            const isEmailInUse = await this.usersRepository.findOneBy({ email: email })
+            const isUserNameInUse = await this.usersRepository.findOneBy({ username: username })
 
-        //Check If Email Is in Use
-        const isEmailInUse = await this.usersRepository.findOneBy({ email: email })
+            if (isEmailInUse) {
+                throw new BadRequestException('Email Already In Use');
+            }
+            if (isUserNameInUse) {
+                throw new BadRequestException('UserName Already In Use');
+            }
 
-        const isUserNameInUse = await this.usersRepository.findOneBy({ username: username })
-        if (isEmailInUse) {
-            throw new BadRequestException('Email Already In Use');
+            // Hash Password
+            const salt = await bcrypt.genSalt(10);
+            const hashpassword = await bcrypt.hash(password, salt);
+
+            // NEW: Fetch interests if provided
+            let userInterests: Interest[] = [];
+            if (interest_ids && interest_ids.length > 0) {
+            userInterests = await this.interestsRepository.findBy({
+                id: In(interest_ids)
+            });
+
+            // Validate that all interest IDs exist
+            if (userInterests.length !== interest_ids.length) {
+                throw new BadRequestException('One or more interest IDs are invalid');
+            }
+            }
+
+            // Create and Save The User
+            const newUser = this.usersRepository.create({
+                first_name,
+                last_name,
+                username,
+                email,
+                password: hashpassword,
+                age,
+                preferred_language_id,
+                interests: userInterests,
+            });
+
+            await this.usersRepository.save(newUser);
+
+            // Generate email verification token
+            const verificationToken = nanoid(64);
+            const expiryDate = new Date();
+            expiryDate.setHours(expiryDate.getHours() + 24);
+            const salt2 = await bcrypt.genSalt(10);
+            const hashedVerificationToken = await bcrypt.hash(verificationToken, salt2);
+
+            const verificationEntry = this.emailVerificationRepository.create({
+                token_hash: hashedVerificationToken,
+                user_id: newUser.id,
+                expires_at: expiryDate,
+            });
+            await this.emailVerificationRepository.save(verificationEntry);
+
+            // Send the verification email
+            await this.mailService.sendVerificationEmail(newUser.email, verificationToken);
+
+            return { message: 'Registration successful! Please check your email to verify your account.' };
+
+        } catch (error) {
+            console.error('Signup error:', error);
+            throw error;
         }
-
-        if (isUserNameInUse) {
-            throw new BadRequestException('UserName Already In Use');
-        }
-
-        //Hash Password
-        const salt = await bcrypt.genSalt(10); // for generate different hash for the same password
-        const hashpassword = await bcrypt.hash(password, salt);
-
-
-        //Create and Save The User in The DataBase
-        const newUser = this.usersRepository.create({
-            first_name,
-            last_name,
-            username,
-            email,
-            password: hashpassword,
-            age,
-            preferred_language_id
-        });
-
-        await this.usersRepository.save(newUser);
-
-        // Generate email verification token
-        const verificationToken = nanoid(64);
-        const expiryDate = new Date();
-        expiryDate.setHours(expiryDate.getHours() + 24); // expires in 24 hours
-        const salt2 = await bcrypt.genSalt(10);
-        const hashedVerificationToken = await bcrypt.hash(verificationToken, salt2);
-        const verificationEntry = this.emailVerificationRepository.create({
-            token_hash: hashedVerificationToken,
-            user_id: newUser.id,
-            expires_at: expiryDate,
-        });
-        await this.emailVerificationRepository.save(verificationEntry);
-
-        // Send the verification email
-        await this.mailService.sendVerificationEmail(newUser.email, verificationToken);
-
-        return { message: 'Registration successful! Please check your email to verify your account.' };
     }
+
+
 
     async login(logindata: LoginDto) {
         const { email, username, password } = logindata;
@@ -213,52 +293,146 @@ export class AuthService {
                 user_id: user.id,
                 expires_at: expiryDate
             });
-             await this.tokenResetRepository.save(newToken);
+            await this.tokenResetRepository.save(newToken);
+            const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+            const generatedCode = await this.randomNumberRepository.create({
+                code_randaom: otpCode,
+                user_id: user.id,
+                expires_at: new Date(Date.now() + 5 * 60 * 1000)
+            });
+            await this.randomNumberRepository.save(generatedCode);
             //Send he link to the User by email (using nodemailer / SES / etc...)
-            this.mailService.sendPasswordResetEmail(email, resetToken);
+            this.mailService.sendPasswordResetEmail(email, otpCode);
         }
 
         return { message: 'If this user exists, they will recieve an Email...' };
     }
+    /*
+        async resetPassword(newPassword: string, resetToken: string) {
+            // Find all non-expired reset tokens from the database
+            const storedTokens = await this.tokenResetRepository.find({
+                where: {
+                    expires_at: MoreThanOrEqual(new Date()),
+                },
+            });
+    
+            // Because the token is hashed in the DB, we must bcrypt.compare each one
+            let matchedToken: ResetToken | null = null;
+            for (const storedToken of storedTokens) {
+                const isMatch = await bcrypt.compare(resetToken, storedToken.token_hash);
+                if (isMatch) {
+                    matchedToken = storedToken;
+                    break;
+                }
+            }
+    
+            if (!matchedToken) {
+                throw new UnauthorizedException('Reset Token Is Invalid or Expired');
+            }
+    
+            // Delete the used reset token so it can't be reused
+            await this.tokenResetRepository.delete({ user_id: matchedToken.user_id });
+    
+            // Find the user and update their password (hashed!)
+            const user = await this.usersRepository.createQueryBuilder('user')
+                .addSelect('user.password')
+                .where('user.id = :id', { id: matchedToken.user_id })
+                .getOne();
+    
+            if (!user) {
+                throw new BadRequestException('User Not Found');
+            }
+    
+            const salt = await bcrypt.genSalt(10);
+            user.password = await bcrypt.hash(newPassword, salt);
+            await this.usersRepository.save(user);
+    
+            return { message: 'Password reset successfully' };
+        }
+    */
+    /*
+        async resetPassword(newPassword: string, resetToken: string, codenumber: string) {
+            // Find all non-expired reset tokens from the database
+            const storedTokens = await this.tokenResetRepository.find({
+                where: {
+                    expires_at: MoreThanOrEqual(new Date()),
+                },
+            });
+    
+            const storedCode = await this.randomNumberRepository.find({
+                where: {
+                    expires_at: MoreThanOrEqual(new Date()),
+                },
+            });
+    
+            // Because the token is hashed in the DB, we must bcrypt.compare each one
+            let matchedToken: ResetToken | null = null;
+            for (const storedToken of storedTokens) {
+                const isMatch = await bcrypt.compare(resetToken, storedToken.token_hash);
+                if (isMatch) {
+                    matchedToken = storedToken;
+                    break;
+                }
+            }
+    
+            // i want to compare the code in the database with the code that the user enter
+    
+            if (!matchedToken) {
+                throw new UnauthorizedException('Reset Token Is Invalid or Expired');
+            }
+    
+            // Delete the used reset token so it can't be reused
+            await this.tokenResetRepository.delete({ user_id: matchedToken.user_id });
+    
+            // Find the user and update their password (hashed!)
+            const user = await this.usersRepository.createQueryBuilder('user')
+                .addSelect('user.password')
+                .where('user.id = :id', { id: matchedToken.user_id })
+                .getOne();
+    
+            if (!user) {
+                throw new BadRequestException('User Not Found');
+            }
+    
+            const salt = await bcrypt.genSalt(10);
+            user.password = await bcrypt.hash(newPassword, salt);
+            await this.usersRepository.save(user);
+    
+            return { message: 'Password reset successfully' };
+        }
+            */
 
-    async resetPassword(newPassword: string, resetToken: string) {
-        // Find all non-expired reset tokens from the database
-        const storedTokens = await this.tokenResetRepository.find({
+    async resetPassword(newPassword: string, codenumber: string) {
+        // Find the matching non-expired code
+        const matchedCode = await this.randomNumberRepository.findOne({
             where: {
+                code_randaom: codenumber,
                 expires_at: MoreThanOrEqual(new Date()),
             },
         });
 
-        // Because the token is hashed in the DB, we must bcrypt.compare each one
-        let matchedToken: ResetToken | null = null;
-        for (const storedToken of storedTokens) {
-            const isMatch = await bcrypt.compare(resetToken, storedToken.token_hash);
-            if (isMatch) {
-                matchedToken = storedToken;
-                break;
-            }
+        if (!matchedCode) {
+            throw new UnauthorizedException('Verification Code Is Invalid or Expired');
         }
 
-        if (!matchedToken) {
-            throw new UnauthorizedException('Reset Token Is Invalid or Expired');
-        }
-
-        // Delete the used reset token so it can't be reused
-        await this.tokenResetRepository.delete({ user_id: matchedToken.user_id });
-
-        // Find the user and update their password (hashed!)
+        // Find the user
         const user = await this.usersRepository.createQueryBuilder('user')
             .addSelect('user.password')
-            .where('user.id = :id', { id: matchedToken.user_id })
+            .where('user.id = :id', { id: matchedCode.user_id })
             .getOne();
 
         if (!user) {
             throw new BadRequestException('User Not Found');
         }
 
+        // Update password
         const salt = await bcrypt.genSalt(10);
         user.password = await bcrypt.hash(newPassword, salt);
         await this.usersRepository.save(user);
+
+        // Cleanup — delete code and token so neither can be reused
+        await this.randomNumberRepository.delete({ user_id: matchedCode.user_id });
+        await this.tokenResetRepository.delete({ user_id: matchedCode.user_id });
 
         return { message: 'Password reset successfully' };
     }
@@ -294,13 +468,59 @@ export class AuthService {
         return { message: 'Email verified successfully! You can now log in.' };
     }
 
+    async checkVerificationStatus(email: string) {
+        const user = await this.usersRepository.findOneBy({ email });
+
+        if (!user) {
+            throw new NotFoundException('User not found');
+        }
+
+        return {
+            email: user.email,
+            email_verified: user.email_verified,
+        };
+    }
+
+    async resendVerificationEmail(email: string) {
+        const user = await this.usersRepository.findOneBy({ email });
+
+        if (!user) {
+            throw new NotFoundException('User not found');
+        }
+
+        if (user.email_verified === true) {
+            throw new BadRequestException('Email already verified');
+        }
+
+        // Delete old verification tokens for this user
+        await this.emailVerificationRepository.delete({ user_id: user.id });
+
+        // Generate new token
+        const verificationToken = nanoid(64);
+        const expiryDate = new Date();
+        expiryDate.setHours(expiryDate.getHours() + 24);
+        const hashedToken = await bcrypt.hash(verificationToken, 10);
+
+        const verificationEntry = this.emailVerificationRepository.create({
+            token_hash: hashedToken,
+            user_id: user.id,
+            expires_at: expiryDate,
+        });
+
+        await this.emailVerificationRepository.save(verificationEntry);
+
+        // Send email
+        await this.mailService.sendVerificationEmail(user.email, verificationToken);
+
+        return { message: 'Verification email sent successfully!' };
+    }
     async findUserByEmail(email: string) {
         return await this.usersRepository.findOneBy({ email: email });
     }
 
     async createUser(userData: { email: string, username: string, firstName?: string, lastName?: string, picture?: string, googleId?: string }) {
         let username = userData.username;
-        
+
         // Ensure username is unique, as it has a unique constraint in the User entity
         let isUserNameInUse = await this.usersRepository.findOneBy({ username: username });
         if (isUserNameInUse) {

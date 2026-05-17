@@ -1,6 +1,8 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
+import { seedInterests } from './seeds/interests.seed';
+import { DataSource } from 'typeorm';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -10,6 +12,8 @@ async function bootstrap() {
       forbidNonWhitelisted: true,
     })
   )
+  const dataSource = app.get(DataSource);
+  await seedInterests(dataSource);
   await app.listen(process.env.PORT ?? 3000);
 }
 bootstrap();

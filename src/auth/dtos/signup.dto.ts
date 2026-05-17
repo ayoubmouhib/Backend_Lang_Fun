@@ -1,6 +1,6 @@
-import { IsEmail, IsInt, IsOptional, IsString, Matches, MaxLength, Min, MinLength } from "class-validator";
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsEmail, IsInt, IsOptional, IsString, Matches, MaxLength, Min, MinLength } from "class-validator";
 
-export class SignupDto{
+export class SignupDto {
 
     @IsString()
     @MaxLength(100)
@@ -20,16 +20,23 @@ export class SignupDto{
     email: string;
 
     @IsString()
-    @MinLength(8,  {message: 'Password Must Be Containe at Least one Number'})
-    @Matches(/^(?=.* [0-9])/, {message: 'Password Must Contain at least One Number'})
+    @MinLength(8, { message: 'Password Must Be Containe at Least one Number' })
+    //@Matches(/^(?=.* [0-9])/, {message: 'Password Must Contain at least One Number'})
     password: string;
 
     @IsInt()
     @Min(12)
-    age ?: number;
-    
+    age?: number;
+
     @IsOptional()
     @IsInt()
     preferred_language_id?: number;
-      
+
+    @IsOptional()
+    @IsArray()
+    @ArrayMinSize(1, { message: 'Select at least one interest' })
+    @ArrayMaxSize(10, { message: 'Maximum 10 interests allowed' })
+    @IsInt({ each: true, message: 'Each interest must be a valid ID' })
+    interest_ids?: number[];
+
 }

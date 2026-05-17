@@ -5,9 +5,12 @@ import {
   CreateDateColumn, 
   UpdateDateColumn, 
   ManyToOne, 
-  JoinColumn 
+  JoinColumn, 
+  ManyToMany,
+  JoinTable
 } from 'typeorm';
 import { Language } from '../../languages/entities/language.entity'; 
+import { Interest } from 'src/auth/entities/interest.entity';
 
 @Entity('users') // Matches The table name in phpMyAdmin
 export class User {
@@ -55,6 +58,14 @@ export class User {
 
   @Column({ type: 'int', nullable: true })
   preferred_language_id: number;
+
+  @ManyToMany(() => Interest, interest => interest.users, { cascade: true })
+    @JoinTable({
+        name: 'user_interests', // This will be your junction table
+        joinColumn: { name: 'user_id', referencedColumnName: 'id' },
+        inverseJoinColumn: { name: 'interest_id', referencedColumnName: 'id' }
+    })
+    interests: Interest[];
 
   
   // Relationship mapping: This links the ID column to the Language Entity.
