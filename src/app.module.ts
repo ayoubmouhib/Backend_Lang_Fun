@@ -17,6 +17,7 @@ import { EmailVerification } from './auth/entities/email-verification.entity';
 import { RandomNumber } from './auth/entities/random-number-verification.entity';
 import { Interest } from './auth/entities/interest.entity';
 import { InterestsModule } from './interests/interests.module';
+import { UserLanguage } from './user/entities/user-language.entity';
 
 @Module({
   imports: [AuthModule, TypeOrmModule.forRoot({
@@ -26,7 +27,7 @@ import { InterestsModule } from './interests/interests.module';
     username: 'root',
     password: '',
     database: 'FlutterProject',
-    entities: [User, Language, RefreshToken, ResetToken, EmailVerification, RandomNumber, Interest],
+    entities: [User, Language, RefreshToken, ResetToken, EmailVerification, RandomNumber, Interest, Language, UserLanguage],
     synchronize: true, // is good for development but NEVER use it in production as it can drop/recreate tables and lose data!
     logging: true, // Optional: to see SQL queries
     migrations: [__dirname + '/migrations/*{.ts,.js}'],
@@ -46,6 +47,7 @@ import { InterestsModule } from './interests/interests.module';
       inject: [ConfigService],
     }),
      InterestsModule,
+
   ],
 
   controllers: [AppController],

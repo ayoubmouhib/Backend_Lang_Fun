@@ -17,6 +17,8 @@ import { MailService } from 'src/services/mail.service';
 import { MoreThan } from 'typeorm';
 import { RandomNumber } from './entities/random-number-verification.entity';
 import { Interest } from './entities/interest.entity';
+import { Language } from 'src/languages/entities/language.entity';
+import { UserLanguage } from 'src/user/entities/user-language.entity';
 
 
 @Injectable()
@@ -35,6 +37,10 @@ export class AuthService {
         private emailVerificationRepository: Repository<EmailVerification>,
         @InjectRepository(RandomNumber)
         private randomNumberRepository: Repository<RandomNumber>,
+        @InjectRepository(Language)
+        private languagesRepository: Repository<Language>,
+        @InjectRepository(UserLanguage)
+        private userLanguagesRepository: Repository<UserLanguage>,
         private jwtService: JwtService,
         private mailService: MailService,
 
@@ -95,7 +101,7 @@ export class AuthService {
             */
     async signup(signupData: SignupDto) {
         try {
-            const { first_name, last_name, username, email, password, age, preferred_language_id, interest_ids  } = signupData;
+            const { first_name, last_name, username, email, password, age, preferred_language_id, interest_ids, languages  } = signupData;
 
             // Check If Email Is in Use
             const isEmailInUse = await this.usersRepository.findOneBy({ email: email })
@@ -125,6 +131,24 @@ export class AuthService {
             }
             }
 
+             // Validate languages if provided
+    if (languages && languages.length > 0) {
+      const languageIds = languages.map(l => l.language_id);
+      const validLanguages = await this.languagesRepository.findBy({
+        id: In(languageIds)
+      });
+
+      if (validLanguages.length !== languageIds.length) {
+        throw new BadRequestException('One or more language IDs are invalid');
+      }
+
+      // Check for duplicate language IDs
+      const uniqueIds = new Set(languageIds);
+      if (uniqueIds.size !== languageIds.length) {
+        throw new BadRequestException('Cannot select the same language twice');
+      }
+    }
+
             // Create and Save The User
             const newUser = this.usersRepository.create({
                 first_name,
@@ -138,6 +162,18 @@ export class AuthService {
             });
 
             await this.usersRepository.save(newUser);
+            // Create UserLanguages entries
+             if (languages && languages.length > 0) {
+      const userLanguageEntries = languages.map(lang => 
+        this.userLanguagesRepository.create({
+          user_id: newUser.id,
+          language_id: lang.language_id,
+          proficiency_level: lang.level
+        })
+      );
+
+      await this.userLanguagesRepository.save(userLanguageEntries);
+    }
 
             // Generate email verification token
             const verificationToken = nanoid(64);

@@ -7,10 +7,12 @@ import {
   ManyToOne, 
   JoinColumn, 
   ManyToMany,
-  JoinTable
+  JoinTable,
+  OneToMany
 } from 'typeorm';
 import { Language } from '../../languages/entities/language.entity'; 
 import { Interest } from 'src/auth/entities/interest.entity';
+import { UserLanguage } from './user-language.entity';
 
 @Entity('users') // Matches The table name in phpMyAdmin
 export class User {
@@ -72,6 +74,9 @@ export class User {
   @ManyToOne(() => Language)
   @JoinColumn({ name: 'preferred_language_id' })
   language: Language;
+
+   @OneToMany(() => UserLanguage, userLanguage => userLanguage.user, { cascade: true })
+  userLanguages: UserLanguage[];
 
   
 }

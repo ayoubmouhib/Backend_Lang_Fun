@@ -1,4 +1,6 @@
-import { ArrayMaxSize, ArrayMinSize, IsArray, IsEmail, IsInt, IsOptional, IsString, Matches, MaxLength, Min, MinLength } from "class-validator";
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsEmail, IsInt, IsOptional, IsString, Matches, MaxLength, Min, MinLength, ValidateNested } from "class-validator";
+import { UserLanguageDto } from "src/user/dto/user-language.dto";
+import { Type } from 'class-transformer';
 
 export class SignupDto {
 
@@ -38,5 +40,13 @@ export class SignupDto {
     @ArrayMaxSize(10, { message: 'Maximum 10 interests allowed' })
     @IsInt({ each: true, message: 'Each interest must be a valid ID' })
     interest_ids?: number[];
+
+    @IsOptional()
+    @IsArray()
+    @ArrayMinSize(1, { message: 'Select at least one language' })
+    @ArrayMaxSize(10, { message: 'Maximum 10 languages allowed' })
+    @ValidateNested({ each: true })
+    @Type(() => UserLanguageDto)
+    languages?: UserLanguageDto[];
 
 }

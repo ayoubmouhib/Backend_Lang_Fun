@@ -1,5 +1,6 @@
 import { Entity, Column, PrimaryGeneratedColumn, OneToMany } from 'typeorm';
 import { User } from '../../user/entities/user.entity'; 
+import { UserLanguage } from 'src/user/entities/user-language.entity';
 
 @Entity('languages')
 export class Language {
@@ -25,4 +26,7 @@ export class Language {
   // This allows you to find all users who speak this language
   @OneToMany(() => User, (user) => user.language)
   users: User[];
+
+  @OneToMany(() => UserLanguage, userLanguage => userLanguage.language)
+  userLanguages: UserLanguage[];
 }

@@ -10,10 +10,12 @@ import { MailService } from 'src/services/mail.service';
 import { GoogleAuthService } from './strategies/google.strategy';
 import { RandomNumber } from './entities/random-number-verification.entity';
 import { Interest } from './entities/interest.entity';
+import { Language } from 'src/languages/entities/language.entity';
+import { UserLanguage } from 'src/user/entities/user-language.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([User, RefreshToken, ResetToken, EmailVerification, RandomNumber, Interest]),
+    TypeOrmModule.forFeature([User, RefreshToken, ResetToken, EmailVerification, RandomNumber, Interest, Language, UserLanguage]),
   ],
   controllers: [AuthController],
   providers: [AuthService, MailService, GoogleAuthService],
