@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { SignupDto } from './dtos/signup.dto';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, MoreThanOrEqual, Repository } from 'typeorm';
+import { DataSource, In, MoreThanOrEqual, Repository } from 'typeorm';
 import { User } from 'src/user/entities/user.entity';
 import * as bcrypt from 'bcrypt';
 import { LoginDto } from './dtos/login.dto';
@@ -18,7 +18,7 @@ import { MoreThan } from 'typeorm';
 import { RandomNumber } from './entities/random-number-verification.entity';
 import { Interest } from './entities/interest.entity';
 import { Language } from 'src/languages/entities/language.entity';
-import { UserLanguage } from 'src/user/entities/user-language.entity';
+import { InitialLevel, UserLanguageProgress } from 'src/user/entities/user-language-progress.entity';
 
 
 @Injectable()
@@ -39,10 +39,11 @@ export class AuthService {
         private randomNumberRepository: Repository<RandomNumber>,
         @InjectRepository(Language)
         private languagesRepository: Repository<Language>,
-        @InjectRepository(UserLanguage)
-        private userLanguagesRepository: Repository<UserLanguage>,
+        @InjectRepository(UserLanguageProgress)
+        private progressRepository: Repository<UserLanguageProgress>,
         private jwtService: JwtService,
         private mailService: MailService,
+        private dataSource: DataSource,
 
     ) { }
     /*
@@ -99,6 +100,115 @@ export class AuthService {
             return { message: 'Registration successful! Please check your email to verify your account.' };
         }
             */
+
+        async signup(signupData: SignupDto) {
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+        const { first_name, last_name, username, email, password, age, preferred_language_id, interest_ids, languages } = signupData;
+
+        // Check If Email Is in Use — use queryRunner.manager
+        const isEmailInUse = await queryRunner.manager.findOne(User, { where: { email } });
+        const isUserNameInUse = await queryRunner.manager.findOne(User, { where: { username } });
+
+        if (isEmailInUse) throw new BadRequestException('Email Already In Use');
+        if (isUserNameInUse) throw new BadRequestException('UserName Already In Use');
+
+        // Hash Password
+        const salt = await bcrypt.genSalt(10);
+        const hashpassword = await bcrypt.hash(password, salt);
+
+        // Fetch interests using queryRunner.manager
+        let userInterests: Interest[] = [];
+        if (interest_ids && interest_ids.length > 0) {
+            userInterests = await queryRunner.manager.findBy(Interest, {
+                id: In(interest_ids)
+            });
+            if (userInterests.length !== interest_ids.length) {
+                throw new BadRequestException('One or more interest IDs are invalid');
+            }
+        }
+
+        // Validate languages using queryRunner.manager
+        if (languages && languages.length > 0) {
+            const languageIds = languages.map(l => l.language_id);
+            const validLanguages = await queryRunner.manager.findBy(Language, {
+                id: In(languageIds)
+            });
+            if (validLanguages.length !== languageIds.length) {
+                throw new BadRequestException('One or more language IDs are invalid');
+            }
+            const uniqueIds = new Set(languageIds);
+            if (uniqueIds.size !== languageIds.length) {
+                throw new BadRequestException('Cannot select the same language twice');
+            }
+        }
+
+        // 🔥 FIX: Create user using queryRunner.manager, NOT this.usersRepository
+        const newUser = queryRunner.manager.create(User, {
+            first_name,
+            last_name,
+            username,
+            email,
+            password: hashpassword,
+            age,
+            preferred_language_id,
+            interests: userInterests,
+        });
+
+        const savedUser = await queryRunner.manager.save(newUser);
+
+        // 🔥 FIX: Create progress entries using queryRunner.manager
+        if (languages && languages.length > 0) {
+            const progressEntries = languages.map(lang => {
+                const levelMap: Record<string, InitialLevel> = {
+                    'beginner': InitialLevel.BEGINNER,
+                    'intermediate': InitialLevel.INTERMEDIATE,
+                    'advanced': InitialLevel.ADVANCED,
+                };
+
+                return queryRunner.manager.create(UserLanguageProgress, {
+                    user_id: savedUser.id,
+                    language_id: lang.language_id,
+                    initial_level: levelMap[lang.level],
+                    initial_selected_at: new Date(),
+                });
+            });
+
+            await queryRunner.manager.save(progressEntries); // 🔥 Use manager, not repository
+        }
+
+        // Generate email verification token
+        const verificationToken = nanoid(64);
+        const expiryDate = new Date();
+        expiryDate.setHours(expiryDate.getHours() + 24);
+        const salt2 = await bcrypt.genSalt(10);
+        const hashedVerificationToken = await bcrypt.hash(verificationToken, salt2);
+
+        const verificationEntry = queryRunner.manager.create(EmailVerification, {
+            token_hash: hashedVerificationToken,
+            user_id: savedUser.id,
+            expires_at: expiryDate,
+        });
+        await queryRunner.manager.save(verificationEntry);
+
+        // Send email (outside transaction is OK)
+        await this.mailService.sendVerificationEmail(newUser.email, verificationToken);
+
+        await queryRunner.commitTransaction();
+
+        return { message: 'Registration successful! Please check your email to verify your account.' };
+
+    } catch (error) {
+        await queryRunner.rollbackTransaction();
+        console.error('Signup error:', error);
+        throw error;
+    } finally {
+        await queryRunner.release();
+    }
+}   /*
     async signup(signupData: SignupDto) {
         try {
             const { first_name, last_name, username, email, password, age, preferred_language_id, interest_ids, languages  } = signupData;
@@ -200,7 +310,7 @@ export class AuthService {
         }
     }
 
-
+*/
 
     async login(logindata: LoginDto) {
         const { email, username, password } = logindata;
