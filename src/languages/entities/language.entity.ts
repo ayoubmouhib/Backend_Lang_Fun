@@ -1,5 +1,6 @@
 import { Entity, Column, PrimaryGeneratedColumn, OneToMany } from 'typeorm';
 import { User } from '../../user/entities/user.entity'; 
+import { UserLanguageProgress } from 'src/user/entities/user-language-progress.entity';
 import { UserLanguage } from 'src/user/entities/user-language.entity';
 
 @Entity('languages')
@@ -29,4 +30,9 @@ export class Language {
 
   @OneToMany(() => UserLanguage, userLanguage => userLanguage.language)
   userLanguages: UserLanguage[];
+
+
+// UPDATED: Replace old userLanguages with new userProgress
+  @OneToMany(() => UserLanguageProgress, progress => progress.language)
+  userProgress: UserLanguageProgress[];
 }

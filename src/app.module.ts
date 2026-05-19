@@ -17,6 +17,7 @@ import { EmailVerification } from './auth/entities/email-verification.entity';
 import { RandomNumber } from './auth/entities/random-number-verification.entity';
 import { Interest } from './auth/entities/interest.entity';
 import { InterestsModule } from './interests/interests.module';
+import { UserLanguageProgress } from './user/entities/user-language-progress.entity';
 import { UserLanguage } from './user/entities/user-language.entity';
 
 @Module({
@@ -27,7 +28,7 @@ import { UserLanguage } from './user/entities/user-language.entity';
     username: 'root',
     password: '',
     database: 'FlutterProject',
-    entities: [User, Language, RefreshToken, ResetToken, EmailVerification, RandomNumber, Interest, Language, UserLanguage],
+    entities: [User, Language, RefreshToken, ResetToken, EmailVerification, RandomNumber, Interest, UserLanguage, UserLanguageProgress],
     synchronize: true, // is good for development but NEVER use it in production as it can drop/recreate tables and lose data!
     logging: true, // Optional: to see SQL queries
     migrations: [__dirname + '/migrations/*{.ts,.js}'],

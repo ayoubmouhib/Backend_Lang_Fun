@@ -12,6 +12,7 @@ import {
 } from 'typeorm';
 import { Language } from '../../languages/entities/language.entity'; 
 import { Interest } from 'src/auth/entities/interest.entity';
+import { UserLanguageProgress } from './user-language-progress.entity';
 import { UserLanguage } from './user-language.entity';
 
 @Entity('users') // Matches The table name in phpMyAdmin
@@ -78,5 +79,9 @@ export class User {
    @OneToMany(() => UserLanguage, userLanguage => userLanguage.user, { cascade: true })
   userLanguages: UserLanguage[];
 
+
+// UPDATED: Replace old userLanguages with new languageProgress
+  @OneToMany(() => UserLanguageProgress, progress => progress.user)
+  languageProgress: UserLanguageProgress[];
   
 }
