@@ -1,6 +1,7 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, CreateDateColumn, UpdateDateColumn, Index, Unique } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, CreateDateColumn, UpdateDateColumn, Index, Unique, OneToMany } from 'typeorm';
 import { User } from '../../user/entities/user.entity';
 import { Language } from '../../languages/entities/language.entity';
+import { QuizResult } from 'src/quiz/entities/quiz-result.entity';
 
 export enum InitialLevel {
   BEGINNER = 'beginner',
@@ -24,13 +25,13 @@ export enum CEFRLevel {
 @Index(['language_id', 'xp_points'])
 export class UserLanguageProgress {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column()
-  user_id: number;
+  user_id!: number;
 
   @Column()
-  language_id: number;
+  language_id!: number;
 
   // 🔥 Initial level from signup
   @Column({
@@ -38,10 +39,10 @@ export class UserLanguageProgress {
     enum: InitialLevel,
     default: InitialLevel.BEGINNER
   })
-  initial_level: InitialLevel;
+  initial_level!: InitialLevel;
 
   @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
-  initial_selected_at: Date;
+  initial_selected_at!: Date;
 
   // 🔥 Current verified level
   @Column({
@@ -49,66 +50,70 @@ export class UserLanguageProgress {
     enum: CEFRLevel,
     nullable: true
   })
-  cefr_level: CEFRLevel | null;
+  cefr_level!: CEFRLevel | null;
 
   @Column({ type: 'int', nullable: true })
-  sub_level: number | null;
+  sub_level!: number | null;
 
   @Column({ default: false })
-  level_verified: boolean;
+  level_verified!: boolean;
 
   @Column({ type: 'timestamp', nullable: true })
-  verified_at: Date | null;
+  verified_at!: Date | null;
 
   // 🔥 Gamification
   @Column({ type: 'int', default: 0 })
-  xp_points: number;
+  xp_points!: number;
 
   @Column({ type: 'int', default: 0 })
-  conversation_count: number;
+  conversation_count!: number;
 
   @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
-  practice_hours: number;
+  practice_hours!: number;
 
   // 🔥 Assessment tracking
   @Column({ type: 'timestamp', nullable: true })
-  last_assessment_date: Date | null;
+  last_assessment_date!: Date | null;
 
   @Column({ type: 'decimal', precision: 5, scale: 2, nullable: true })
-  last_assessment_score: number | null;
+  last_assessment_score!: number | null;
 
   @Column({ default: false })
-  needs_reassessment: boolean;
+  needs_reassessment!: boolean;
 
   // 🔥 Streaks
   @Column({ type: 'int', default: 0 })
-  current_streak_days: number;
+  current_streak_days!: number;
 
   @Column({ type: 'int', default: 0 })
-  longest_streak_days: number;
+  longest_streak_days!: number;
 
   @Column({ type: 'date', nullable: true })
-  last_activity_date: Date | null;
+  last_activity_date!: Date | null;
 
   // 🔥 Learning preferences (JSON)
   @Column({ type: 'json', nullable: true })
-  learning_goals: string[] | null;
+  learning_goals!: string[] | null;
 
   @Column({ type: 'json', nullable: true })
-  focus_areas: string[] | null;
+  focus_areas!: string[] | null;
 
   @CreateDateColumn()
-  created_at: Date;
+  created_at!: Date;
 
   @UpdateDateColumn()
-  updated_at: Date;
+  updated_at!: Date;
 
   // Relations
   @ManyToOne(() => User, user => user.languageProgress, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'user_id' })
-  user: User;
+  user!: User;
 
   @ManyToOne(() => Language, language => language.userProgress, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'language_id' })
-  language: Language;
+  language!: Language;
+
+  @OneToMany(() => QuizResult, quizResult => quizResult.userLanguageProgress)
+  quizResults!: QuizResult[];
+
 }

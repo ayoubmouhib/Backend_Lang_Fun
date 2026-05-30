@@ -14,6 +14,7 @@ import { GoogleLoginDto } from './dtos/googleLogin.dto';
 
 @Controller('auth')
 export class AuthController {
+  
   constructor(private readonly authService: AuthService, private googleAuthService: GoogleAuthService) { }
 
   //POST Signup

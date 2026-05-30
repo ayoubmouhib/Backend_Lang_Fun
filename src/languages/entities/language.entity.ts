@@ -2,6 +2,10 @@ import { Entity, Column, PrimaryGeneratedColumn, OneToMany } from 'typeorm';
 import { User } from '../../user/entities/user.entity'; 
 import { UserLanguageProgress } from 'src/user/entities/user-language-progress.entity';
 import { UserLanguage } from 'src/user/entities/user-language.entity';
+import { QuizQuestionsBank } from 'src/quiz/entities/quiz-questions-bank.entity';
+import { QuizTemplate } from 'src/quiz/entities/quiz-template.entity';
+import { QuizInstance } from 'src/quiz/entities/quiz-instance.entity';
+import { QuizResult } from 'src/quiz/entities/quiz-result.entity';
 
 @Entity('languages')
 export class Language {
@@ -35,4 +39,18 @@ export class Language {
 // UPDATED: Replace old userLanguages with new userProgress
   @OneToMany(() => UserLanguageProgress, progress => progress.language)
   userProgress: UserLanguageProgress[];
+
+
+
+  @OneToMany(() => QuizQuestionsBank, question => question.language)
+  quizQuestions: QuizQuestionsBank[];
+
+  @OneToMany(() => QuizTemplate, template => template.language)
+  quizTemplates: QuizTemplate[];
+
+  @OneToMany(() => QuizInstance, instance => instance.language)
+  quizInstances: QuizInstance[];
+
+  @OneToMany(() => QuizResult, result => result.language)
+  quizResults: QuizResult[];
 }
