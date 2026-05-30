@@ -19,6 +19,12 @@ import { Interest } from './auth/entities/interest.entity';
 import { InterestsModule } from './interests/interests.module';
 import { UserLanguageProgress } from './user/entities/user-language-progress.entity';
 import { UserLanguage } from './user/entities/user-language.entity';
+import { QuizModule } from './quiz/quiz.module';
+import { QuizResult } from './quiz/entities/quiz-result.entity';
+import { QuizInstance } from './quiz/entities/quiz-instance.entity';
+import { QuizTemplate } from './quiz/entities/quiz-template.entity';
+import { QuizUserAnswer } from './quiz/entities/quiz-user-answer.entity';
+import { QuizQuestionsBank } from './quiz/entities/quiz-questions-bank.entity';
 
 @Module({
   imports: [AuthModule, TypeOrmModule.forRoot({
@@ -28,12 +34,12 @@ import { UserLanguage } from './user/entities/user-language.entity';
     username: 'root',
     password: '',
     database: 'FlutterProject',
-    entities: [User, Language, RefreshToken, ResetToken, EmailVerification, RandomNumber, Interest, UserLanguage, UserLanguageProgress],
+    entities: [User, Language, RefreshToken, ResetToken, EmailVerification, RandomNumber, Interest, UserLanguage, UserLanguageProgress, QuizResult, QuizInstance, QuizTemplate, QuizUserAnswer, QuizQuestionsBank],
     synchronize: true, // is good for development but NEVER use it in production as it can drop/recreate tables and lose data!
     logging: true, // Optional: to see SQL queries
     migrations: [__dirname + '/migrations/*{.ts,.js}'],
     migrationsRun: true, // Automatically run migrations on startup
-  }), UserModule, LanguagesModule, AuthModule,
+  }), UserModule, LanguagesModule, AuthModule,QuizModule,
     ConfigModule.forRoot({
       isGlobal: true,
       cache: true,
