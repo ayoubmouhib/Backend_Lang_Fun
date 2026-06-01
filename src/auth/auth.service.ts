@@ -18,7 +18,7 @@ import { MoreThan } from 'typeorm';
 import { RandomNumber } from './entities/random-number-verification.entity';
 import { Interest } from './entities/interest.entity';
 import { Language } from 'src/languages/entities/language.entity';
-import { InitialLevel, UserLanguageProgress } from 'src/user/entities/user-language-progress.entity';
+import { CEFRLevel, InitialLevel, UserLanguageProgress } from 'src/user/entities/user-language-progress.entity';
 
 
 @Injectable()
@@ -100,7 +100,7 @@ export class AuthService {
             return { message: 'Registration successful! Please check your email to verify your account.' };
         }
             */
-
+/*
         async signup(signupData: SignupDto) {
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -176,8 +176,8 @@ export class AuthService {
                     initial_selected_at: new Date(),
                 });
             });
-
-            await queryRunner.manager.save(progressEntries); // 🔥 Use manager, not repository
+            
+            //await queryRunner.manager.save(progressEntries); // 🔥 Use manager, not repository
         }
 
         // Generate email verification token
@@ -208,7 +208,200 @@ export class AuthService {
     } finally {
         await queryRunner.release();
     }
-}   /*
+}   
+    */
+    async signup(signupData: SignupDto) {
+  const queryRunner = this.dataSource.createQueryRunner();
+  await queryRunner.connect();
+  await queryRunner.startTransaction();
+
+  try {
+    const {
+      first_name,
+      last_name,
+      username,
+      email,
+      password,
+      age,
+      preferred_language_id,
+      interest_ids,
+      languages,
+    } = signupData;
+
+    // Check If Email Is in Use
+    const isEmailInUse = await queryRunner.manager.findOne(User, {
+      where: { email },
+    });
+    const isUserNameInUse = await queryRunner.manager.findOne(User, {
+      where: { username },
+    });
+
+    if (isEmailInUse) throw new BadRequestException('Email Already In Use');
+    if (isUserNameInUse)
+      throw new BadRequestException('UserName Already In Use');
+
+    // Hash Password
+    const salt = await bcrypt.genSalt(10);
+    const hashpassword = await bcrypt.hash(password, salt);
+
+    // Fetch interests
+    let userInterests: Interest[] = [];
+    if (interest_ids && interest_ids.length > 0) {
+      userInterests = await queryRunner.manager.findBy(Interest, {
+        id: In(interest_ids),
+      });
+      if (userInterests.length !== interest_ids.length) {
+        throw new BadRequestException('One or more interest IDs are invalid');
+      }
+    }
+
+    // Validate preferred language
+    if (preferred_language_id) {
+      const preferredLanguage = await queryRunner.manager.findOne(Language, {
+        where: { id: preferred_language_id },
+      });
+      if (!preferredLanguage) {
+        throw new BadRequestException('Preferred language ID is invalid');
+      }
+    }
+
+    // Validate learning languages
+    if (languages && languages.length > 0) {
+      const languageIds = languages.map((l) => l.language_id);
+      const validLanguages = await queryRunner.manager.findBy(Language, {
+        id: In(languageIds),
+      });
+      if (validLanguages.length !== languageIds.length) {
+        throw new BadRequestException(
+          'One or more language IDs are invalid',
+        );
+      }
+      const uniqueIds = new Set(languageIds);
+      if (uniqueIds.size !== languageIds.length) {
+        throw new BadRequestException('Cannot select the same language twice');
+      }
+      if (preferred_language_id && uniqueIds.has(preferred_language_id)) {
+        throw new BadRequestException(
+          'Preferred language cannot also be a learning language',
+        );
+      }
+    }
+
+    // Create user
+    const newUser = queryRunner.manager.create(User, {
+      first_name,
+      last_name,
+      username,
+      email,
+      password: hashpassword,
+      age,
+      preferred_language_id,
+      interests: userInterests,
+    });
+
+    const savedUser = await queryRunner.manager.save(newUser);
+
+    // 🔥 CREATE LANGUAGE PROGRESS ENTRIES
+    const progressEntries: UserLanguageProgress[] = [];
+
+    // 1️⃣ Add native language entry
+    if (preferred_language_id) {
+      const nativeEntry = queryRunner.manager.create(UserLanguageProgress, {
+        user_id: savedUser.id,
+        language_id: preferred_language_id,
+        initial_level: InitialLevel.ADVANCED,
+        cefr_level: CEFRLevel.C2,
+        sub_level: 6,
+        level_verified: true,
+        user_type: 'native',
+        initial_selected_at: new Date(),
+      });
+      progressEntries.push(nativeEntry);
+    }
+
+    // 2️⃣ Add learning language entries
+    if (languages && languages.length > 0) {
+      const levelMap: Record<string, InitialLevel> = {
+        beginner: InitialLevel.BEGINNER,
+        intermediate: InitialLevel.INTERMEDIATE,
+        advanced: InitialLevel.ADVANCED,
+      };
+
+      for (const lang of languages) {
+        const learningEntry = queryRunner.manager.create(
+          UserLanguageProgress,
+          {
+            user_id: savedUser.id,
+            language_id: lang.language_id,
+            initial_level: levelMap[lang.level] || InitialLevel.BEGINNER,
+            user_type: 'learning',
+            initial_selected_at: new Date(),
+          },
+        );
+        progressEntries.push(learningEntry);
+      }
+    }
+
+    // Save all progress entries
+    if (progressEntries.length > 0) {
+      await queryRunner.manager.save(progressEntries);
+    }
+
+    // Generate JWT tokens
+    const accessToken = this.jwtService.sign(
+      { userId: savedUser.id, email: savedUser.email },
+      { expiresIn: '24h' },
+    );
+    const refreshToken = this.jwtService.sign(
+      { userId: savedUser.id, email: savedUser.email },
+      { expiresIn: '7d' },
+    );
+
+    // Save refresh token
+    const refreshTokenEntity = queryRunner.manager.create(RefreshToken, {
+      user_id: savedUser.id,
+      token_hash: refreshToken,
+      expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+    });
+    await queryRunner.manager.save(refreshTokenEntity);
+
+    // 🔥 Generate email verification token (BEFORE commit)
+    const verificationToken = nanoid(64);
+    const expiryDate = new Date();
+    expiryDate.setHours(expiryDate.getHours() + 24);
+    const salt2 = await bcrypt.genSalt(10);
+    const hashedVerificationToken = await bcrypt.hash(verificationToken, salt2);
+
+    const verificationEntry = queryRunner.manager.create(EmailVerification, {
+      token_hash: hashedVerificationToken,
+      user_id: savedUser.id,
+      expires_at: expiryDate,
+    });
+    await queryRunner.manager.save(verificationEntry);
+
+    // 🔥 COMMIT ONLY ONCE - AT THE END!
+    await queryRunner.commitTransaction();
+
+    // 🔥 Send email AFTER successful commit (outside transaction)
+    try {
+      await this.mailService.sendVerificationEmail(email, verificationToken);
+    } catch (emailError) {
+      console.error('Email send failed:', emailError);
+      // Don't fail signup if email fails, but log it
+    }
+
+    return { message: 'Registration successful! Please check your email to verify your account.' };
+  } catch (error) {
+    // Rollback transaction on any error
+    await queryRunner.rollbackTransaction();
+    console.error('Signup error:', error);
+    throw error;
+  } finally {
+    // Release queryRunner
+    await queryRunner.release();
+  }
+}
+/*
     async signup(signupData: SignupDto) {
         try {
             const { first_name, last_name, username, email, password, age, preferred_language_id, interest_ids, languages  } = signupData;

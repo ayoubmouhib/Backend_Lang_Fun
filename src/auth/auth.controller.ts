@@ -5,7 +5,7 @@ import { SignupDto } from './dtos/signup.dto';
 import { LoginDto } from './dtos/login.dto';
 import { RefreshTokenDto } from './dtos/refresh.dto';
 import { ChangePasswordDto } from './dtos/changePassword.dto';
-import { AuthGaurd } from 'src/garuds/auth.gaurd';
+import { AuthGuard } from 'src/garuds/auth.gaurd';
 import { ForgoutPasswordDto } from './dtos/forogtPassword.dto';
 import { ResetPasswordDto } from './dtos/resetPassword.dto';
 import { GoogleAuthService } from './strategies/google.strategy';
@@ -38,7 +38,7 @@ export class AuthController {
   }
 
   // TODO : PUT Change Password
-  @UseGuards(AuthGaurd)
+  @UseGuards(AuthGuard)
   @Put('change-Password')
   async changePassword(@Body() changedPasswordDto: ChangePasswordDto, @Req() req) {
     return this.authService.changePassword(req.userId, changedPasswordDto.oldPassword, changedPasswordDto.newPassword);

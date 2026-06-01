@@ -61,6 +61,16 @@ export class UserLanguageProgress {
   @Column({ type: 'timestamp', nullable: true })
   verified_at!: Date | null;
 
+  @Column({
+    type: 'enum',
+    enum: ['learning', 'native', 'fluent'],
+    default: 'learning',
+  })
+  user_type: 'learning' | 'native' | 'fluent';
+  // learning = wants to learn this language
+  // native = native speaker of this language
+  // fluent = fluent but not native (learned well)
+
   // 🔥 Gamification
   @Column({ type: 'int', default: 0 })
   xp_points!: number;

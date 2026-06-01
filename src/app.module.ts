@@ -25,21 +25,55 @@ import { QuizInstance } from './quiz/entities/quiz-instance.entity';
 import { QuizTemplate } from './quiz/entities/quiz-template.entity';
 import { QuizUserAnswer } from './quiz/entities/quiz-user-answer.entity';
 import { QuizQuestionsBank } from './quiz/entities/quiz-questions-bank.entity';
+import { MatchingModule } from './matching/matching.module';
+
+// 🔥 ADD THESE MATCHING ENTITIES
+import { ConversationRequest } from './matching/entities/conversation-request.entity';
+import { ConversationSession } from './matching/entities/conversation-session.entity';
+import { MatchingPreference } from './matching/entities/matching-preference.entity';
+import { UserRating } from './matching/entities/user-rating.entity';
 
 @Module({
-  imports: [AuthModule, TypeOrmModule.forRoot({
-    type: 'mysql',
-    host: 'localhost',
-    port: 3306,
-    username: 'root',
-    password: '',
-    database: 'FlutterProject',
-    entities: [User, Language, RefreshToken, ResetToken, EmailVerification, RandomNumber, Interest, UserLanguage, UserLanguageProgress, QuizResult, QuizInstance, QuizTemplate, QuizUserAnswer, QuizQuestionsBank],
-    synchronize: true, // is good for development but NEVER use it in production as it can drop/recreate tables and lose data!
-    logging: true, // Optional: to see SQL queries
-    migrations: [__dirname + '/migrations/*{.ts,.js}'],
-    migrationsRun: true, // Automatically run migrations on startup
-  }), UserModule, LanguagesModule, AuthModule,QuizModule,
+  imports: [
+    AuthModule,
+    TypeOrmModule.forRoot({
+      type: 'mysql',
+      host: 'localhost',
+      port: 3306,
+      username: 'root',
+      password: '',
+      database: 'FlutterProject',
+      // 🔥 ADD MATCHING ENTITIES HERE
+      entities: [
+        User,
+        Language,
+        RefreshToken,
+        ResetToken,
+        EmailVerification,
+        RandomNumber,
+        Interest,
+        UserLanguage,
+        UserLanguageProgress,
+        QuizResult,
+        QuizInstance,
+        QuizTemplate,
+        QuizUserAnswer,
+        QuizQuestionsBank,
+        ConversationRequest, // 🔥 NEW
+        ConversationSession, // 🔥 NEW
+        MatchingPreference, // 🔥 NEW
+        UserRating, // 🔥 NEW
+      ],
+      synchronize: true, // is good for development but NEVER use it in production as it can drop/recreate tables and lose data!
+      logging: true, // Optional: to see SQL queries
+      migrations: [__dirname + '/migrations/*{.ts,.js}'],
+      migrationsRun: true, // Automatically run migrations on startup
+    }),
+    UserModule,
+    LanguagesModule,
+    AuthModule,
+    QuizModule,
+    MatchingModule, // Already here
     ConfigModule.forRoot({
       isGlobal: true,
       cache: true,
@@ -53,13 +87,11 @@ import { QuizQuestionsBank } from './quiz/entities/quiz-questions-bank.entity';
       global: true,
       inject: [ConfigService],
     }),
-     InterestsModule,
-
+    InterestsModule,
   ],
-
   controllers: [AppController],
   providers: [AppService],
 })
 export class AppModule {
-  constructor(private dataSource: DataSource) { }
+  constructor(private dataSource: DataSource) {}
 }
