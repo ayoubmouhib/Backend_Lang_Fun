@@ -6,23 +6,31 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, Not } from 'typeorm';
-import { ConversationRequest } from '../entities/conversation-request.entity';
-import { ConversationSession } from '../entities/conversation-session.entity';
+import { ConversationRequest } from './entities/conversation-request.entity';
+import { ConversationSession } from './entities/conversation-session.entity';
 import { UserLanguageProgress } from '../user/entities/user-language-progress.entity';
 import { User } from '../user/entities/user.entity';
-import { UserRating } from '../entities/user-rating.entity';
-import { MatchingPreference } from '../entities/matching-preference.entity';
+import { UserRating } from './entities/user-rating.entity';
+import { MatchingPreference } from './entities/matching-preference.entity';
 import { CreateConversationRequestDto } from '../dto/conversation-request.dto';
+import { BlockedUserService } from './services/blocked-user.service';
 
 interface MatchingCandidate {
   user: User;
-  progress: UserLanguageProgress;
+  targetLanguageProgress: UserLanguageProgress;
+  exchangeLanguageProgress: UserLanguageProgress;
   preference: MatchingPreference | null;
   averageRating: number;
+  source: 'active_request' | 'reciprocal_profile';
+  activeRequest?: ConversationRequest;
 }
 
 interface MatchingScore {
   user_id: number;
+  matched_language_id: number;
+  matched_user_role: string;
+  source: 'active_request' | 'reciprocal_profile';
+  active_request_id?: number;
   compatibility_score: number;
   score_breakdown: {
     language_match: number;
@@ -54,6 +62,7 @@ export class MatchingService {
 
     @InjectRepository(MatchingPreference)
     private matchingPrefRepo: Repository<MatchingPreference>,
+    private blockedUserService: BlockedUserService,
   ) {}
 
   // 🔥 MAIN MATCHING ALGORITHM
@@ -62,31 +71,39 @@ export class MatchingService {
     languageId: number,
     requesterRole: string,
   ): Promise<MatchingScore | null> {
-    console.log(`🔍 Finding match for user ${userId}, language ${languageId}`);
+    console.log(
+      `🔍 Finding exchange match for user ${userId}, target language ${languageId}`,
+    );
 
-    // Get requester's progress
-    const requesterProgress = await this.progressRepo.findOne({
+    const requesterLearningProgress = await this.progressRepo.findOne({
       where: { user_id: userId, language_id: languageId },
       relations: ['user'],
     });
 
-    if (!requesterProgress) {
-      throw new NotFoundException('User language progress not found');
+    if (!requesterLearningProgress) {
+      throw new NotFoundException('Learning language progress not found');
     }
 
-    // Get requester's matching preferences
+    const requesterExchangeProgress =
+      await this.findBestExchangeLanguageForUser(userId, languageId);
+
+    if (!requesterExchangeProgress) {
+      throw new BadRequestException(
+        'Add at least one native or fluent language before searching for an exchange partner.',
+      );
+    }
+
     const requesterPrefs = await this.matchingPrefRepo.findOne({
       where: { user_id: userId },
     });
 
-    // Get blocked users
     const blockedUsers = await this.getBlockedUsers(userId);
 
-    // 🔥 FIND ALL CANDIDATES
     const candidates = await this.getCandidates(
       userId,
       languageId,
-      requesterProgress,
+      requesterLearningProgress,
+      requesterExchangeProgress.language_id,
       requesterPrefs,
       blockedUsers,
     );
@@ -101,7 +118,8 @@ export class MatchingService {
     const scores = await Promise.all(
       candidates.map((candidate) =>
         this.calculateCompatibilityScore(
-          requesterProgress,
+          requesterLearningProgress,
+          requesterExchangeProgress,
           candidate,
           requesterRole,
           requesterPrefs,
@@ -120,81 +138,110 @@ export class MatchingService {
   // 🔥 GET CANDIDATE POOL
   private async getCandidates(
     userId: number,
-    languageId: number,
-    requesterProgress: UserLanguageProgress,
+    targetLanguageId: number,
+    requesterLearningProgress: UserLanguageProgress,
+    requesterExchangeLanguageId: number,
     requesterPrefs: MatchingPreference | null,
     blockedUsers: number[],
   ): Promise<MatchingCandidate[]> {
-    // Find users learning the same language
-    const potentialMatches = await this.progressRepo.find({
+    const activeSearchCandidates = await this.getActiveSearchCandidates(
+      userId,
+      targetLanguageId,
+      requesterExchangeLanguageId,
+      blockedUsers,
+    );
+
+    const targetSpeakers = await this.progressRepo.find({
       where: {
-        language_id: languageId,
-        user_id: Not(userId), // Not self
+        language_id: targetLanguageId,
+        user_id: Not(userId),
+        user_type: In(['native', 'fluent']),
       },
       relations: ['user'],
     });
 
-    // Filter candidates
     const candidates: MatchingCandidate[] = [];
 
-    for (const progress of potentialMatches) {
-      // Skip if blocked
-      if (blockedUsers.includes(progress.user_id)) {
+    for (const targetProgress of targetSpeakers) {
+      if (blockedUsers.includes(targetProgress.user_id)) {
         continue;
       }
 
-      // Skip if already in conversation
-      const existingConversation = await this.conversationRequestRepo.findOne({
+      if (
+        activeSearchCandidates.some(
+          (candidate) => candidate.user.id === targetProgress.user_id,
+        )
+      ) {
+        continue;
+      }
+
+      const hasActiveRequest = await this.hasReciprocalPendingRequest(
+        targetProgress.user_id,
+        userId,
+        requesterExchangeLanguageId,
+        targetLanguageId,
+      );
+
+      if (
+        !hasActiveRequest &&
+        (await this.hasOpenConversationBetween(userId, targetProgress.user_id))
+      ) {
+        continue;
+      }
+
+      const exchangeProgress = await this.progressRepo.findOne({
         where: {
-          requester_id: userId,
-          matched_user_id: progress.user_id,
-          status: In(['pending', 'accepted']),
+          user_id: targetProgress.user_id,
+          language_id: requesterExchangeLanguageId,
+          user_type: 'learning',
         },
       });
 
-      if (existingConversation) {
+      if (!exchangeProgress) {
         continue;
       }
 
-      // Get user preferences
       const prefs = await this.matchingPrefRepo.findOne({
-        where: { user_id: progress.user_id },
+        where: { user_id: targetProgress.user_id },
       });
-
-      // Get user rating
-      const rating = await this.getAverageUserRating(progress.user_id);
+      const rating = await this.getAverageUserRating(targetProgress.user_id);
 
       candidates.push({
-        user: progress.user,
-        progress,
+        user: targetProgress.user,
+        targetLanguageProgress: targetProgress,
+        exchangeLanguageProgress: exchangeProgress,
         preference: prefs,
         averageRating: rating,
+        source: hasActiveRequest ? 'active_request' : 'reciprocal_profile',
       });
     }
 
-    return candidates;
+    return [...activeSearchCandidates, ...candidates];
   }
 
   // 🔥 CALCULATE COMPATIBILITY SCORE
   private async calculateCompatibilityScore(
-    requesterProgress: UserLanguageProgress,
+    requesterLearningProgress: UserLanguageProgress,
+    requesterExchangeProgress: UserLanguageProgress,
     candidate: MatchingCandidate,
     requesterRole: string,
     requesterPrefs: MatchingPreference | null,
   ): Promise<MatchingScore> {
     const scores = {
-      language_match: 100, // Always 100 (same language required)
+      language_match: candidate.source === 'active_request' ? 100 : 90,
       level_compatibility: this.calculateLevelCompatibility(
-        requesterProgress,
-        candidate.progress,
+        requesterLearningProgress,
+        candidate.exchangeLanguageProgress,
         requesterPrefs?.level_flexibility || 2,
       ),
       mutual_benefit: this.calculateMutualBenefit(
-        requesterProgress,
-        candidate.progress,
+        requesterLearningProgress,
+        requesterExchangeProgress,
+        candidate.targetLanguageProgress,
+        candidate.exchangeLanguageProgress,
       ),
       interest_overlap: await this.calculateInterestOverlap(
-        requesterProgress.user_id,
+        requesterLearningProgress.user_id,
         candidate.user.id,
       ),
       timezone_proximity: this.calculateTimezoneProximity(
@@ -206,12 +253,12 @@ export class MatchingService {
 
     // 🔥 WEIGHTED SCORE CALCULATION
     const weights = {
-      language_match: 0.3, // 30% - Most important
-      level_compatibility: 0.25, // 25%
-      mutual_benefit: 0.2, // 20%
-      interest_overlap: 0.1, // 10%
-      timezone_proximity: 0.1, // 10%
-      rating_score: 0.05, // 5%
+      language_match: 0.35,
+      level_compatibility: 0.2,
+      mutual_benefit: 0.25,
+      interest_overlap: 0.08,
+      timezone_proximity: 0.07,
+      rating_score: 0.05,
     };
 
     const totalScore =
@@ -225,6 +272,10 @@ export class MatchingService {
 
     return {
       user_id: candidate.user.id,
+      matched_language_id: requesterExchangeProgress.language_id,
+      matched_user_role: 'learner',
+      source: candidate.source,
+      active_request_id: candidate.activeRequest?.id,
       compatibility_score: parseFloat(totalScore.toFixed(2)),
       score_breakdown: scores,
     };
@@ -277,29 +328,34 @@ export class MatchingService {
 
   // 🔥 MUTUAL BENEFIT (20% weight)
   private calculateMutualBenefit(
-    requesterProgress: UserLanguageProgress,
-    candidateProgress: UserLanguageProgress,
+    requesterLearningProgress: UserLanguageProgress,
+    requesterExchangeProgress: UserLanguageProgress,
+    candidateTargetProgress: UserLanguageProgress,
+    candidateExchangeProgress: UserLanguageProgress,
   ): number {
-    // Check if they're learning each other's native languages
-    // This is a simplified version - in production, you'd check user.native_language
+    const requesterCanTeach =
+      requesterExchangeProgress.user_type === 'native' ||
+      requesterExchangeProgress.user_type === 'fluent';
+    const candidateCanTeach =
+      candidateTargetProgress.user_type === 'native' ||
+      candidateTargetProgress.user_type === 'fluent';
 
-    // For now, assume mutual benefit if levels are complementary
     const requesterLevel = this.cefrToNumeric(
-      requesterProgress.cefr_level,
-      requesterProgress.sub_level,
+      requesterLearningProgress.cefr_level,
+      requesterLearningProgress.sub_level,
     );
     const candidateLevel = this.cefrToNumeric(
-      candidateProgress.cefr_level,
-      candidateProgress.sub_level,
+      candidateExchangeProgress.cefr_level,
+      candidateExchangeProgress.sub_level,
     );
 
-    // Ideal: one is slightly higher than the other (can teach each other)
     const levelDiff = Math.abs(requesterLevel - candidateLevel);
+    const reciprocalBonus = requesterCanTeach && candidateCanTeach ? 40 : 0;
 
-    if (levelDiff === 0) return 70; // Same level - some benefit
-    if (levelDiff <= 10) return 100; // Slight difference - good for mutual learning
-    if (levelDiff <= 20) return 80; // Medium difference - still good
-    return 50; // Large difference - less mutual benefit
+    if (levelDiff === 0) return Math.min(100, 55 + reciprocalBonus);
+    if (levelDiff <= 10) return Math.min(100, 60 + reciprocalBonus);
+    if (levelDiff <= 20) return Math.min(100, 45 + reciprocalBonus);
+    return Math.min(100, 30 + reciprocalBonus);
   }
 
   // 🔥 INTEREST OVERLAP (15% weight)
@@ -383,10 +439,155 @@ export class MatchingService {
     return avgScore;
   }
 
+  private async findBestExchangeLanguageForUser(
+    userId: number,
+    targetLanguageId: number,
+  ): Promise<UserLanguageProgress | null> {
+    const offeredLanguages = await this.progressRepo.find({
+      where: {
+        user_id: userId,
+        user_type: In(['native', 'fluent']),
+      },
+    });
+
+    const differentLanguage = offeredLanguages.find(
+      (progress) => progress.language_id !== targetLanguageId,
+    );
+
+    if (differentLanguage) {
+      return differentLanguage;
+    }
+
+    const user = await this.userRepo.findOne({ where: { id: userId } });
+    if (
+      !user?.preferred_language_id ||
+      user.preferred_language_id === targetLanguageId
+    ) {
+      return null;
+    }
+
+    return this.progressRepo.findOne({
+      where: {
+        user_id: userId,
+        language_id: user.preferred_language_id,
+      },
+    });
+  }
+
+  private async getActiveSearchCandidates(
+    userId: number,
+    targetLanguageId: number,
+    requesterExchangeLanguageId: number,
+    blockedUsers: number[],
+  ): Promise<MatchingCandidate[]> {
+    const activeSearches = await this.conversationRequestRepo.find({
+      where: {
+        requester_id: Not(userId),
+        requester_language_id: requesterExchangeLanguageId,
+        matched_language_id: targetLanguageId,
+        status: 'searching',
+      },
+      relations: ['requester'],
+      order: { created_at: 'ASC' },
+    });
+
+    const candidates: MatchingCandidate[] = [];
+
+    for (const search of activeSearches) {
+      if (blockedUsers.includes(search.requester_id)) {
+        continue;
+      }
+
+      if (await this.hasOpenConversationBetween(userId, search.requester_id)) {
+        continue;
+      }
+
+      const targetProgress = await this.progressRepo.findOne({
+        where: {
+          user_id: search.requester_id,
+          language_id: targetLanguageId,
+          user_type: In(['native', 'fluent']),
+        },
+        relations: ['user'],
+      });
+
+      const exchangeProgress = await this.progressRepo.findOne({
+        where: {
+          user_id: search.requester_id,
+          language_id: requesterExchangeLanguageId,
+          user_type: 'learning',
+        },
+      });
+
+      if (!targetProgress || !exchangeProgress) {
+        continue;
+      }
+
+      const prefs = await this.matchingPrefRepo.findOne({
+        where: { user_id: search.requester_id },
+      });
+      const rating = await this.getAverageUserRating(search.requester_id);
+
+      candidates.push({
+        user: search.requester ?? targetProgress.user,
+        targetLanguageProgress: targetProgress,
+        exchangeLanguageProgress: exchangeProgress,
+        preference: prefs,
+        averageRating: rating,
+        source: 'active_request',
+        activeRequest: search,
+      });
+    }
+
+    return candidates;
+  }
+
+  private async hasOpenConversationBetween(
+    userId: number,
+    candidateUserId: number,
+  ): Promise<boolean> {
+    const existingConversation = await this.conversationRequestRepo.findOne({
+      where: [
+        {
+          requester_id: userId,
+          matched_user_id: candidateUserId,
+          status: In(['pending', 'accepted', 'searching']),
+        },
+        {
+          requester_id: candidateUserId,
+          matched_user_id: userId,
+          status: In(['pending', 'accepted', 'searching']),
+        },
+      ],
+    });
+
+    return Boolean(existingConversation);
+  }
+
+  private async hasReciprocalPendingRequest(
+    requesterId: number,
+    matchedUserId: number,
+    requesterTargetLanguageId: number,
+    matchedTargetLanguageId: number,
+  ): Promise<boolean> {
+    const request = await this.conversationRequestRepo.findOne({
+      where: {
+        requester_id: requesterId,
+        matched_user_id: matchedUserId,
+        requester_language_id: requesterTargetLanguageId,
+        matched_language_id: matchedTargetLanguageId,
+        status: 'pending',
+      },
+    });
+
+    return Boolean(request);
+  }
+
   // Helper: Get blocked users
   private async getBlockedUsers(userId: number): Promise<number[]> {
-    // TODO: Implement when BlockedUser entity is created
-    return [];
+     const blockedUsers = await this.blockedUserService.getBlockedUserIds(userId);
+  console.log(`🚫 User ${userId} has blocked ${blockedUsers.length} users`);
+  return blockedUsers;
   }
 
   // 🔥 CREATE CONVERSATION REQUEST
@@ -404,9 +605,15 @@ export class MatchingService {
     );
 
     if (!bestMatch) {
-      throw new NotFoundException(
-        'No suitable match found. Try again later or adjust your preferences.',
+      return this.createOpenSearchRequest(
+        userId,
+        dto.requester_language_id,
+        dto.requester_role,
       );
+    }
+
+    if (bestMatch.source === 'active_request' && bestMatch.active_request_id) {
+      return this.claimActiveSearchRequest(userId, bestMatch);
     }
 
     // Create conversation request
@@ -415,8 +622,8 @@ export class MatchingService {
       requester_language_id: dto.requester_language_id,
       requester_role: dto.requester_role,
       matched_user_id: bestMatch.user_id,
-      matched_language_id: dto.requester_language_id,
-      matched_user_role: 'learner', // TODO: Determine based on algorithm
+      matched_language_id: bestMatch.matched_language_id,
+      matched_user_role: bestMatch.matched_user_role,
       compatibility_score: bestMatch.compatibility_score,
       score_breakdown: bestMatch.score_breakdown,
       status: 'pending',
@@ -428,53 +635,137 @@ export class MatchingService {
     return {
       request_id: savedRequest.id,
       matched_user_id: bestMatch.user_id,
+      matched_language_id: bestMatch.matched_language_id,
+      match_source: bestMatch.source,
       compatibility_score: bestMatch.compatibility_score,
       score_breakdown: bestMatch.score_breakdown,
-      message: 'Match found! Waiting for their response...',
+      message:
+        bestMatch.source === 'active_request'
+          ? 'Reciprocal match found! Waiting for confirmation...'
+          : 'Exchange partner found! Waiting for their response...',
     };
   }
 
-  // Get pending requests for user
-  /*
-  async getPendingRequests(userId: number) {
-    return this.conversationRequestRepo.find({
-      where: { matched_user_id: userId, status: 'pending' },
-      relations: [
-        'requester',
-        'requester_language',
-        'matched_user',
-        'matched_language',
-      ],
+  private async createOpenSearchRequest(
+    userId: number,
+    targetLanguageId: number,
+    requesterRole: string,
+  ) {
+    const requesterExchangeProgress =
+      await this.findBestExchangeLanguageForUser(userId, targetLanguageId);
+
+    if (!requesterExchangeProgress) {
+      throw new BadRequestException(
+        'Add at least one native or fluent language before searching for an exchange partner.',
+      );
+    }
+
+    const existingSearch = await this.conversationRequestRepo.findOne({
+      where: {
+        requester_id: userId,
+        requester_language_id: targetLanguageId,
+        matched_language_id: requesterExchangeProgress.language_id,
+        status: 'searching',
+      },
     });
+
+    if (existingSearch) {
+      return {
+        request_id: existingSearch.id,
+        status: 'searching',
+        requester_language_id: targetLanguageId,
+        matched_language_id: requesterExchangeProgress.language_id,
+        match_source: 'waiting_for_partner',
+        message: 'Search already active. Waiting for a reciprocal partner...',
+      };
+    }
+
+    const request = this.conversationRequestRepo.create({
+      requester_id: userId,
+      requester_language_id: targetLanguageId,
+      requester_role: requesterRole,
+      matched_language_id: requesterExchangeProgress.language_id,
+      matched_user_role: 'learner',
+      status: 'searching',
+    });
+
+    const savedRequest = await this.conversationRequestRepo.save(request);
+
+    return {
+      request_id: savedRequest.id,
+      status: 'searching',
+      requester_language_id: targetLanguageId,
+      matched_language_id: requesterExchangeProgress.language_id,
+      match_source: 'waiting_for_partner',
+      message: 'No partner is available yet. Your search is active.',
+    };
   }
-*/
-// src/matching/matching.service.ts
 
-async getPendingRequests(userId: number): Promise<any[]> {
-  console.log(`\n🔍 Finding pending requests for user ${userId}`);
+  private async claimActiveSearchRequest(
+    userId: number,
+    bestMatch: MatchingScore,
+  ) {
+    const activeRequest = await this.conversationRequestRepo.findOne({
+      where: {
+        id: bestMatch.active_request_id,
+        status: 'searching',
+      },
+    });
 
-  const requests = await this.conversationRequestRepo.find({
-    where: {
-      matched_user_id: userId,  // 🔥 User is the MATCHED user
-      status: 'pending',         // 🔥 Status must be pending
-    },
-    relations: ['requester', 'language'],
-  });
+    if (!activeRequest) {
+      throw new NotFoundException('Active search is no longer available');
+    }
 
-  console.log(`✅ Found ${requests.length} pending requests for user ${userId}`);
+    activeRequest.matched_user_id = userId;
+    activeRequest.matched_user_role = 'learner';
+    activeRequest.status = 'pending';
+    activeRequest.compatibility_score = bestMatch.compatibility_score;
+    activeRequest.score_breakdown = bestMatch.score_breakdown;
+    activeRequest.matched_at = new Date();
 
-  return requests.map((req) => ({
-    request_id: req.id,
-    requester: {
-      id: req.requester.id,
-      name: `${req.requester.first_name} ${req.requester.last_name}`,
-      email: req.requester.email,
-    },
-    language: req.requester_language?.name || 'Unknown',
-    compatibility_score: req.compatibility_score,
-    score_breakdown: req.score_breakdown,
-  }));
-}
+    const savedRequest = await this.conversationRequestRepo.save(activeRequest);
+
+    return {
+      request_id: savedRequest.id,
+      matched_user_id: bestMatch.user_id,
+      matched_language_id: bestMatch.matched_language_id,
+      match_source: bestMatch.source,
+      compatibility_score: bestMatch.compatibility_score,
+      score_breakdown: bestMatch.score_breakdown,
+      status: savedRequest.status,
+      message:
+        'Active reciprocal search found! Waiting for your confirmation...',
+    };
+  }
+
+  async getPendingRequests(userId: number): Promise<any[]> {
+    console.log(`\n🔍 Finding pending requests for user ${userId}`);
+
+    const requests = await this.conversationRequestRepo.find({
+      where: {
+        matched_user_id: userId, // 🔥 User is the MATCHED user
+        status: 'pending', // 🔥 Status must be pending
+      },
+      relations: ['requester', 'requester_language', 'matched_language'],
+    });
+
+    console.log(
+      `✅ Found ${requests.length} pending requests for user ${userId}`,
+    );
+
+    return requests.map((req) => ({
+      request_id: req.id,
+      requester: {
+        id: req.requester.id,
+        name: `${req.requester.first_name} ${req.requester.last_name}`,
+        email: req.requester.email,
+      },
+      requester_language: req.requester_language?.name || 'Unknown',
+      matched_language: req.matched_language?.name || 'Unknown',
+      compatibility_score: req.compatibility_score,
+      score_breakdown: req.score_breakdown,
+    }));
+  }
   // Get all conversations for user
   async getUserConversations(userId: number) {
     return this.conversationRequestRepo.find({
@@ -487,88 +778,9 @@ async getPendingRequests(userId: number): Promise<any[]> {
         'matched_user',
         'requester_language',
         'matched_language',
-        'conversation_session',
       ],
     });
   }
-/*
-  async acceptRequest(userId: number, requestId: number) {
-    const request = await this.conversationRequestRepo.findOne({
-      where: { id: requestId },
-    });
-
-    if (!request) {
-      throw new NotFoundException('Conversation request not found');
-    }
-
-    if (request.matched_user_id !== userId) {
-      throw new BadRequestException(
-        'You can only accept requests matched to you',
-      );
-    }
-
-    if (request.status !== 'pending') {
-      throw new BadRequestException(`Request is already ${request.status}`);
-    }
-
-    request.status = 'accepted';
-    await this.conversationRequestRepo.save(request);
-
-    const session = this.conversationSessionRepo.create({
-      conversation_request_id: request.id,
-      user_1_id: request.requester_id,
-      user_2_id: request.matched_user_id,
-      language_1_id: request.requester_language_id,
-      language_2_id:
-        request.matched_language_id ?? request.requester_language_id,
-      session_type: 'text',
-      status: 'waiting',
-    });
-
-    const savedSession = await this.conversationSessionRepo.save(session);
-
-    return {
-      request_id: request.id,
-      session_id: savedSession.id,
-      status: request.status,
-      message: 'Conversation request accepted',
-    };
-  }
-    */
-
-  /*
-
-  async rejectRequest(userId: number, requestId: number) {
-    const request = await this.conversationRequestRepo.findOne({
-      where: { id: requestId },
-    });
-
-    if (!request) {
-      throw new NotFoundException('Conversation request not found');
-    }
-
-    if (request.matched_user_id !== userId) {
-      throw new BadRequestException(
-        'You can only reject requests matched to you',
-      );
-    }
-
-    if (request.status !== 'pending') {
-      throw new BadRequestException(`Request is already ${request.status}`);
-    }
-
-    request.status = 'rejected';
-    await this.conversationRequestRepo.save(request);
-
-    return {
-      request_id: request.id,
-      status: request.status,
-      message: 'Conversation request rejected',
-    };
-  }
-    */
-
-
   // 🔥 ACCEPT CONVERSATION REQUEST
   async acceptRequest(
     userId: number,
@@ -601,10 +813,7 @@ async getPendingRequests(userId: number): Promise<any[]> {
     await this.conversationRequestRepo.save(request);
 
     // 🔥 CREATE CONVERSATION SESSION
-    const session = await this.createConversationSession(
-      request,
-      sessionType,
-    );
+    const session = await this.createConversationSession(request, sessionType);
 
     return {
       request_id: request.id,
@@ -925,11 +1134,7 @@ async getPendingRequests(userId: number): Promise<any[]> {
   }
 
   // Helper: Award XP
-  private async awardXPForAction(
-    userId: number,
-    xp: number,
-    action: string,
-  ) {
+  private async awardXPForAction(userId: number, xp: number, action: string) {
     try {
       // TODO: Update user XP in user_language_progress table
       console.log(`🎁 Awarded ${xp} XP to user ${userId} for ${action}`);
@@ -941,10 +1146,7 @@ async getPendingRequests(userId: number): Promise<any[]> {
   // Get user's conversation history
   async getConversationHistory(userId: number) {
     const sessions = await this.conversationSessionRepo.find({
-      where: [
-        { user_1_id: userId },
-        { user_2_id: userId },
-      ],
+      where: [{ user_1_id: userId }, { user_2_id: userId }],
       relations: ['user_1', 'user_2', 'language_1', 'language_2'],
       order: { created_at: 'DESC' },
     });
