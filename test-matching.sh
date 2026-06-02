@@ -6,6 +6,10 @@ echo "════════════════════════�
 echo "🚀 COMPLETE LANGUAGE EXCHANGE MATCHING TEST"
 echo "════════════════════════════════════════════════"
 
+# Language IDs used by the local seed data.
+ENGLISH_ID=1
+SPANISH_ID=4
+
 # Generate unique values
 TIMESTAMP=$(date +%s%N | cut -b1-13)
 
@@ -24,9 +28,9 @@ USER_A_RESPONSE=$(curl -s -X POST http://localhost:3000/auth/signup \
     \"email\": \"john_${TIMESTAMP}@test.com\",
     \"password\": \"SecurePass123\",
     \"age\": 28,
-    \"preferred_language_id\": 1,
+    \"preferred_language_id\": $ENGLISH_ID,
     \"interest_ids\": [1, 2, 3],
-    \"languages\": [{\"language_id\": 2, \"level\": \"beginner\"}]
+    \"languages\": [{\"language_id\": $SPANISH_ID, \"level\": \"beginner\"}]
   }")
 
 echo "Response:"
@@ -43,8 +47,8 @@ fi
 echo -e "\n✅ User A Created:"
 echo "   ID: $USER_A_ID"
 echo "   Email: john_${TIMESTAMP}@test.com"
-echo "   Native: English (ID: 1)"
-echo "   Learning: Spanish (ID: 2)"
+echo "   Native: English (ID: $ENGLISH_ID)"
+echo "   Learning: Spanish (ID: $SPANISH_ID)"
 
 # ═══════════════════════════════════════════════════
 # STEP 2: USER B SIGNUP (Native Spanish, Learning English)
@@ -61,9 +65,9 @@ USER_B_RESPONSE=$(curl -s -X POST http://localhost:3000/auth/signup \
     \"email\": \"maria_${TIMESTAMP}@test.com\",
     \"password\": \"SecurePass456\",
     \"age\": 26,
-    \"preferred_language_id\": 2,
+    \"preferred_language_id\": $SPANISH_ID,
     \"interest_ids\": [1, 4, 5],
-    \"languages\": [{\"language_id\": 1, \"level\": \"intermediate\"}]
+    \"languages\": [{\"language_id\": $ENGLISH_ID, \"level\": \"intermediate\"}]
   }")
 
 echo "Response:"
@@ -80,29 +84,31 @@ fi
 echo -e "\n✅ User B Created:"
 echo "   ID: $USER_B_ID"
 echo "   Email: maria_${TIMESTAMP}@test.com"
-echo "   Native: Spanish (ID: 2)"
-echo "   Learning: English (ID: 1)"
+echo "   Native: Spanish (ID: $SPANISH_ID)"
+echo "   Learning: English (ID: $ENGLISH_ID)"
 
 # ═══════════════════════════════════════════════════
 # STEP 3: USER A REQUESTS MATCH
 # ═══════════════════════════════════════════════════
 echo -e "\n\n3️⃣  USER A ($USER_A_ID) REQUESTS MATCH"
 echo "─────────────────────────────────────────────────"
-echo "Requesting to learn Spanish (language_id: 2)"
+echo "Requesting to learn Spanish (language_id: $SPANISH_ID)"
 
 MATCH_RESPONSE=$(curl -s -X POST http://localhost:3000/matching/request \
   -H "Authorization: Bearer $USER_A_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{
-    "requester_language_id": 2,
-    "requester_role": "learner"
-  }')
+  -d "{
+    \"requester_language_id\": $SPANISH_ID,
+    \"requester_role\": \"learner\"
+  }")
 
 echo "Response:"
 echo $MATCH_RESPONSE | jq '.'
 
 REQUEST_ID=$(echo $MATCH_RESPONSE | jq -r '.request_id')
 MATCHED_USER_ID=$(echo $MATCH_RESPONSE | jq -r '.matched_user_id')
+MATCHED_LANGUAGE_ID=$(echo $MATCH_RESPONSE | jq -r '.matched_language_id')
+MATCH_SOURCE=$(echo $MATCH_RESPONSE | jq -r '.match_source')
 SCORE=$(echo $MATCH_RESPONSE | jq -r '.compatibility_score')
 
 if [ "$REQUEST_ID" = "null" ] || [ -z "$REQUEST_ID" ]; then
@@ -113,12 +119,26 @@ fi
 echo -e "\n✅ Match Request Created:"
 echo "   Request ID: $REQUEST_ID"
 echo "   Matched User ID: $MATCHED_USER_ID (Should be $USER_B_ID)"
+echo "   Matched Language ID: $MATCHED_LANGUAGE_ID (Should be English: $ENGLISH_ID)"
+echo "   Match Source: $MATCH_SOURCE"
 echo "   Compatibility Score: $SCORE"
 
 if [ "$MATCHED_USER_ID" != "$USER_B_ID" ]; then
   echo -e "\n⚠️  WARNING: Wrong user matched!"
   echo "Expected: $USER_B_ID, Got: $MATCHED_USER_ID"
   echo "This might be OK if system found a better match, but check database"
+fi
+
+if [ "$MATCHED_LANGUAGE_ID" != "$ENGLISH_ID" ]; then
+  echo -e "\n❌ Wrong matched_language_id!"
+  echo "Expected User B to learn English ($ENGLISH_ID), got: $MATCHED_LANGUAGE_ID"
+  exit 1
+fi
+
+if [ "$MATCH_SOURCE" != "reciprocal_profile" ] && [ "$MATCH_SOURCE" != "active_request" ]; then
+  echo -e "\n❌ Invalid match_source!"
+  echo "Expected reciprocal_profile or active_request, got: $MATCH_SOURCE"
+  exit 1
 fi
 
 # ═══════════════════════════════════════════════════
@@ -129,10 +149,32 @@ echo "────────────────────────�
 
 echo "Conversation Requests:"
 mysql -u root -p FlutterProject -e "
-SELECT id, requester_id, matched_user_id, status 
+SELECT 
+  id,
+  requester_id,
+  requester_language_id,
+  matched_user_id,
+  matched_language_id,
+  matched_user_role,
+  status,
+  compatibility_score
 FROM conversation_requests 
 WHERE id = $REQUEST_ID;
 " 2>/dev/null
+
+DB_REQUEST=$(mysql -N -u root -p FlutterProject -e "
+SELECT CONCAT(requester_language_id, ':', matched_language_id, ':', status)
+FROM conversation_requests
+WHERE id = $REQUEST_ID;
+" 2>/dev/null)
+
+EXPECTED_DB_REQUEST="${SPANISH_ID}:${ENGLISH_ID}:pending"
+if [ "$DB_REQUEST" != "$EXPECTED_DB_REQUEST" ]; then
+  echo -e "\n❌ Conversation request has wrong language direction!"
+  echo "Expected: $EXPECTED_DB_REQUEST"
+  echo "Got:      $DB_REQUEST"
+  exit 1
+fi
 
 echo -e "\nUser Language Progress:"
 mysql -u root -p FlutterProject -e "
@@ -156,6 +198,8 @@ echo "Response:"
 echo $PENDING | jq '.'
 
 PENDING_COUNT=$(echo $PENDING | jq -r '.total')
+PENDING_REQUESTER_LANGUAGE=$(echo $PENDING | jq -r '.requests[0].requester_language')
+PENDING_MATCHED_LANGUAGE=$(echo $PENDING | jq -r '.requests[0].matched_language')
 
 if [ "$PENDING_COUNT" -eq 0 ]; then
   echo -e "\n❌ NO PENDING REQUESTS FOUND FOR USER B!"
@@ -167,6 +211,8 @@ if [ "$PENDING_COUNT" -eq 0 ]; then
 fi
 
 echo -e "\n✅ Found $PENDING_COUNT pending request(s)"
+echo "   Requester wants to learn: $PENDING_REQUESTER_LANGUAGE"
+echo "   Matched user wants to learn: $PENDING_MATCHED_LANGUAGE"
 
 # ═══════════════════════════════════════════════════
 # STEP 6: USER B ACCEPTS REQUEST

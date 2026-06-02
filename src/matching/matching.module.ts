@@ -9,6 +9,9 @@ import { UserLanguageProgress } from '../user/entities/user-language-progress.en
 import { User } from '../user/entities/user.entity'; // 🔥 Adjust path
 import { UserRating } from './entities/user-rating.entity'; // 🔥 Create if missing
 import { MatchingPreference } from './entities/matching-preference.entity'; // 🔥 Create if missing
+import { BlockedUser } from './entities/blocked-user.entity';
+import { BlockedUserService } from './services/blocked-user.service';
+import { BlockedUserController } from './blocked-user.controller';
 
 
 @Module({
@@ -18,12 +21,13 @@ import { MatchingPreference } from './entities/matching-preference.entity'; // �
       ConversationSession,
       MatchingPreference,     
       UserRating,
+       BlockedUser,
       UserLanguageProgress,
       User,
     ]),
   ],
-  providers: [MatchingService],
-  controllers: [MatchingController],
-  exports: [MatchingService],
+  providers: [MatchingService, BlockedUserService],
+  controllers: [MatchingController, BlockedUserController],
+  exports: [BlockedUserService,MatchingService],
 })
 export class MatchingModule {}
