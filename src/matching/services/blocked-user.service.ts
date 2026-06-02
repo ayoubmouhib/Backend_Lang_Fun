@@ -9,7 +9,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { BlockedUser } from '../entities/blocked-user.entity';
 import { User } from '../../user/entities/user.entity';
-import { BlockUserDto, UnblockUserDto } from '../../dto/block-user.dto'; // 🔥 FIX: Correct path
+import { BlockUserDto, UnblockUserDto } from '../../dto/block-user.dto'; 
 
 @Injectable()
 export class BlockedUserService {

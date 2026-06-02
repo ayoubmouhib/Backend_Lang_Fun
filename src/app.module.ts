@@ -32,6 +32,7 @@ import { ConversationRequest } from './matching/entities/conversation-request.en
 import { ConversationSession } from './matching/entities/conversation-session.entity';
 import { MatchingPreference } from './matching/entities/matching-preference.entity';
 import { UserRating } from './matching/entities/user-rating.entity';
+import { BlockedUser } from './matching/entities/blocked-user.entity';
 
 @Module({
   imports: [
@@ -59,10 +60,12 @@ import { UserRating } from './matching/entities/user-rating.entity';
         QuizTemplate,
         QuizUserAnswer,
         QuizQuestionsBank,
-        ConversationRequest, // 🔥 NEW
-        ConversationSession, // 🔥 NEW
-        MatchingPreference, // 🔥 NEW
-        UserRating, // 🔥 NEW
+        ConversationRequest, 
+        ConversationSession, 
+        MatchingPreference, 
+        UserRating, 
+        BlockedUser,
+
       ],
       synchronize: true, // is good for development but NEVER use it in production as it can drop/recreate tables and lose data!
       logging: true, // Optional: to see SQL queries

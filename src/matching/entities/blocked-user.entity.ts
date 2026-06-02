@@ -1,5 +1,3 @@
-// src/matching/entities/blocked-user.entity.ts
-
 import {
   Entity,
   PrimaryGeneratedColumn,
