@@ -59,6 +59,12 @@ export class ConversationRequest {
   @Column({ default: 'pending' })
   status: string;
 
+  @Column({ type: 'boolean', default: false })
+  is_active_search: boolean;
+
+  @Column({ type: 'timestamp', nullable: true })
+  active_search_timeout: Date | null;
+
   @Column({ nullable: true })
   matched_at: Date;
 

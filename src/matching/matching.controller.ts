@@ -9,16 +9,45 @@ import {
   ParseIntPipe,
   UseGuards,
   Req,
+  Query,
   HttpCode,
 } from '@nestjs/common';
 import { MatchingService } from './matching.service';
-import { CreateConversationRequestDto } from '../dto/conversation-request.dto';
+import { ActiveSearchDto, CreateConversationRequestDto } from '../dto/conversation-request.dto';
 import { AuthGuard } from '../garuds/auth.gaurd'; 
 
 @Controller('matching')
 @UseGuards(AuthGuard) // 🔥 YOUR GUARD
 export class MatchingController {
   constructor(private readonly matchingService: MatchingService) {}
+
+  // 🔥 0. CASE 0 — ACTIVE SEARCH (instant match if someone is searching right now)
+  @Post('request/active-search')
+  async initiateActiveSearch(
+    @Req() req: any,
+    @Body() dto: ActiveSearchDto,
+  ) {
+    const userId = req.user?.id || req.userId;
+    if (!userId) throw new Error('User ID not found');
+
+    return this.matchingService.initiateActiveSearch(
+      userId,
+      dto.requester_language_id,
+      dto.timeout_seconds ?? 600,
+    );
+  }
+
+  // 🔥 0b. POLL SEARCH STATUS — User A polls this while waiting in the active pool
+  @Get('search-status/:requestId')
+  async getSearchStatus(
+    @Req() req: any,
+    @Param('requestId', ParseIntPipe) requestId: number,
+  ) {
+    const userId = req.user?.id || req.userId;
+    if (!userId) throw new Error('User ID not found');
+
+    return this.matchingService.getSearchStatus(userId, requestId);
+  }
 
   // 🔥 1. REQUEST A CONVERSATION
   @Post('request')
@@ -117,7 +146,7 @@ async getPendingRequests(@Req() req) {
   async acceptRequest(
     @Req() req: any,
     @Param('requestId', ParseIntPipe) requestId: number,
-    @Body() body: { session_type?: string },
+    @Body() body: { session_type?: string; planned_duration_minutes?: number },
   ) {
     const userId = req.user?.id || req.userId;
 
@@ -129,6 +158,7 @@ async getPendingRequests(@Req() req) {
       userId,
       requestId,
       body.session_type || 'text',
+      body.planned_duration_minutes,
     );
   }
 
@@ -169,6 +199,7 @@ async getPendingRequests(@Req() req) {
   async startSession(
     @Req() req: any,
     @Param('sessionId', ParseIntPipe) sessionId: number,
+    @Body() body: { planned_duration_minutes?: number } = {},
   ) {
     const userId = req.user?.id || req.userId;
 
@@ -176,7 +207,7 @@ async getPendingRequests(@Req() req) {
       throw new Error('User ID not found');
     }
 
-    return this.matchingService.startSession(userId, sessionId);
+    return this.matchingService.startSession(userId, sessionId, body.planned_duration_minutes);
   }
 
   // 🔥 9. END SESSION
@@ -231,5 +262,25 @@ async getPendingRequests(@Req() req) {
     }
 
     return this.matchingService.rateUser(userId, sessionId, ratingData);
+  }
+
+  // 🔥 12. GET RATINGS RECEIVED BY THE CURRENT USER ("My Reviews")
+  @Get('ratings/received')
+  async getMyRatings(
+    @Req() req: any,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    const userId = req.user?.id || req.userId;
+
+    if (!userId) {
+      throw new Error('User ID not found');
+    }
+
+    return this.matchingService.getUserRatings(
+      userId,
+      limit ? parseInt(limit, 10) : 50,
+      offset ? parseInt(offset, 10) : 0,
+    );
   }
 }

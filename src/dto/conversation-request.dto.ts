@@ -34,6 +34,18 @@ export class AcceptConversationRequestDto {
   session_type: string = 'text';
 }
 
+export class ActiveSearchDto {
+  @IsInt()
+  @IsNotEmpty()
+  requester_language_id: number;
+
+  @IsInt()
+  @IsOptional()
+  @Min(60)
+  @Max(3600)
+  timeout_seconds?: number = 600;
+}
+
 export class RateUserDto {
   @IsInt()
   @Min(1)

@@ -14,6 +14,8 @@ import { UserRating } from './entities/user-rating.entity';
 import { MatchingPreference } from './entities/matching-preference.entity';
 import { CreateConversationRequestDto } from '../dto/conversation-request.dto';
 import { BlockedUserService } from './services/blocked-user.service';
+import { Conversation, ConversationType } from '../conversation/entities/conversation.entity';
+import { AppGateway } from '../gateway/app.gateway';
 
 interface MatchingCandidate {
   user: User;
@@ -62,7 +64,12 @@ export class MatchingService {
 
     @InjectRepository(MatchingPreference)
     private matchingPrefRepo: Repository<MatchingPreference>,
+
+    @InjectRepository(Conversation)
+    private conversationRepo: Repository<Conversation>,
+
     private blockedUserService: BlockedUserService,
+    private gateway: AppGateway,
   ) {}
 
   // 🔥 MAIN MATCHING ALGORITHM
@@ -480,16 +487,17 @@ export class MatchingService {
     requesterExchangeLanguageId: number,
     blockedUsers: number[],
   ): Promise<MatchingCandidate[]> {
-    const activeSearches = await this.conversationRequestRepo.find({
-      where: {
-        requester_id: Not(userId),
-        requester_language_id: requesterExchangeLanguageId,
-        matched_language_id: targetLanguageId,
-        status: 'searching',
-      },
-      relations: ['requester'],
-      order: { created_at: 'ASC' },
-    });
+    const now = new Date();
+    const activeSearches = await this.conversationRequestRepo
+      .createQueryBuilder('cr')
+      .leftJoinAndSelect('cr.requester', 'requester')
+      .where('cr.requester_id != :userId', { userId })
+      .andWhere('cr.requester_language_id = :exchangeLangId', { exchangeLangId: requesterExchangeLanguageId })
+      .andWhere('cr.matched_language_id = :targetLangId', { targetLangId: targetLanguageId })
+      .andWhere('cr.status = :status', { status: 'searching' })
+      .andWhere('(cr.active_search_timeout IS NULL OR cr.active_search_timeout > :now)', { now })
+      .orderBy('cr.created_at', 'ASC')
+      .getMany();
 
     const candidates: MatchingCandidate[] = [];
 
@@ -650,6 +658,8 @@ export class MatchingService {
     userId: number,
     targetLanguageId: number,
     requesterRole: string,
+    isActiveSearch: boolean = false,
+    timeoutSeconds: number = 600,
   ) {
     const requesterExchangeProgress =
       await this.findBestExchangeLanguageForUser(userId, targetLanguageId);
@@ -670,15 +680,23 @@ export class MatchingService {
     });
 
     if (existingSearch) {
+      const timeoutIn = existingSearch.active_search_timeout
+        ? Math.max(0, Math.floor((existingSearch.active_search_timeout.getTime() - Date.now()) / 1000))
+        : null;
+
       return {
         request_id: existingSearch.id,
         status: 'searching',
         requester_language_id: targetLanguageId,
         matched_language_id: requesterExchangeProgress.language_id,
-        match_source: 'waiting_for_partner',
         message: 'Search already active. Waiting for a reciprocal partner...',
+        search_timeout_in: timeoutIn,
       };
     }
+
+    const timeoutAt = isActiveSearch
+      ? new Date(Date.now() + timeoutSeconds * 1000)
+      : null;
 
     const request = this.conversationRequestRepo.create({
       requester_id: userId,
@@ -687,6 +705,8 @@ export class MatchingService {
       matched_language_id: requesterExchangeProgress.language_id,
       matched_user_role: 'learner',
       status: 'searching',
+      is_active_search: isActiveSearch,
+      active_search_timeout: timeoutAt,
     });
 
     const savedRequest = await this.conversationRequestRepo.save(request);
@@ -696,8 +716,11 @@ export class MatchingService {
       status: 'searching',
       requester_language_id: targetLanguageId,
       matched_language_id: requesterExchangeProgress.language_id,
-      match_source: 'waiting_for_partner',
-      message: 'No partner is available yet. Your search is active.',
+      message: isActiveSearch
+        ? 'Looking for your perfect match...'
+        : 'No partner is available yet. Your search is active.',
+      estimated_wait: isActiveSearch ? 'Users are matched within 1-5 minutes' : null,
+      search_timeout_in: isActiveSearch ? timeoutSeconds : null,
     };
   }
 
@@ -706,55 +729,61 @@ export class MatchingService {
     bestMatch: MatchingScore,
   ) {
     const activeRequest = await this.conversationRequestRepo.findOne({
-      where: {
-        id: bestMatch.active_request_id,
-        status: 'searching',
-      },
+      where: { id: bestMatch.active_request_id, status: 'searching' },
+      relations: ['requester'],
     });
 
     if (!activeRequest) {
       throw new NotFoundException('Active search is no longer available');
     }
 
+    // Case 0: both users are actively searching — create session immediately
     activeRequest.matched_user_id = userId;
     activeRequest.matched_user_role = 'learner';
-    activeRequest.status = 'pending';
+    activeRequest.status = 'matched';
     activeRequest.compatibility_score = bestMatch.compatibility_score;
     activeRequest.score_breakdown = bestMatch.score_breakdown;
     activeRequest.matched_at = new Date();
+    await this.conversationRequestRepo.save(activeRequest);
 
-    const savedRequest = await this.conversationRequestRepo.save(activeRequest);
+    const session = await this.createConversationSession(activeRequest, 'text');
 
     return {
-      request_id: savedRequest.id,
-      matched_user_id: bestMatch.user_id,
+      status: 'matched',
+      session_id: session.id,
+      matched_user: {
+        id: bestMatch.user_id,
+        name: `${activeRequest.requester.first_name} ${activeRequest.requester.last_name}`,
+      },
       matched_language_id: bestMatch.matched_language_id,
-      match_source: bestMatch.source,
       compatibility_score: bestMatch.compatibility_score,
       score_breakdown: bestMatch.score_breakdown,
-      status: savedRequest.status,
-      message:
-        'Active reciprocal search found! Waiting for your confirmation...',
+      message: 'Match found! Your conversation session has started.',
+      can_start_messaging: true,
     };
   }
 
   async getPendingRequests(userId: number): Promise<any[]> {
     console.log(`\n🔍 Finding pending requests for user ${userId}`);
 
-    const requests = await this.conversationRequestRepo.find({
-      where: {
-        matched_user_id: userId, // 🔥 User is the MATCHED user
-        status: 'pending', // 🔥 Status must be pending
-      },
-      relations: ['requester', 'requester_language', 'matched_language'],
-    });
+    const [received, sent] = await Promise.all([
+      // Requests others sent TO this user
+      this.conversationRequestRepo.find({
+        where: { matched_user_id: userId, status: 'pending' },
+        relations: ['requester', 'requester_language', 'matched_language'],
+      }),
+      // Requests THIS user sent that are still pending
+      this.conversationRequestRepo.find({
+        where: { requester_id: userId, status: 'pending' },
+        relations: ['matched_user', 'requester_language', 'matched_language'],
+      }),
+    ]);
 
-    console.log(
-      `✅ Found ${requests.length} pending requests for user ${userId}`,
-    );
+    console.log(`✅ Found ${received.length} incoming, ${sent.length} sent pending requests for user ${userId}`);
 
-    return requests.map((req) => ({
+    const incoming = received.map((req) => ({
       request_id: req.id,
+      is_sender: false,
       requester: {
         id: req.requester.id,
         name: `${req.requester.first_name} ${req.requester.last_name}`,
@@ -765,6 +794,24 @@ export class MatchingService {
       compatibility_score: req.compatibility_score,
       score_breakdown: req.score_breakdown,
     }));
+
+    const outgoing = sent.map((req) => ({
+      request_id: req.id,
+      is_sender: true,
+      requester: {
+        id: req.matched_user?.id ?? 0,
+        name: req.matched_user
+          ? `${req.matched_user.first_name} ${req.matched_user.last_name}`
+          : 'Partner',
+        email: req.matched_user?.email ?? '',
+      },
+      requester_language: req.requester_language?.name || 'Unknown',
+      matched_language: req.matched_language?.name || 'Unknown',
+      compatibility_score: req.compatibility_score,
+      score_breakdown: req.score_breakdown,
+    }));
+
+    return [...incoming, ...outgoing];
   }
   // Get all conversations for user
   async getUserConversations(userId: number) {
@@ -786,10 +833,10 @@ export class MatchingService {
     userId: number,
     requestId: number,
     sessionType: string = 'text',
+    plannedDurationMinutes?: number,
   ) {
     console.log(`✅ User ${userId} accepting request ${requestId}`);
 
-    // Get request
     const request = await this.conversationRequestRepo.findOne({
       where: { id: requestId },
       relations: ['requester', 'matched_user'],
@@ -799,7 +846,6 @@ export class MatchingService {
       throw new NotFoundException('Conversation request not found');
     }
 
-    // Verify the matched user is the one accepting
     if (request.matched_user_id !== userId) {
       throw new BadRequestException('You cannot accept this request');
     }
@@ -808,12 +854,22 @@ export class MatchingService {
       throw new BadRequestException('This request is no longer available');
     }
 
-    // Update request status
     request.status = 'accepted';
     await this.conversationRequestRepo.save(request);
 
-    // 🔥 CREATE CONVERSATION SESSION
-    const session = await this.createConversationSession(request, sessionType);
+    const session = await this.createConversationSession(request, sessionType, plannedDurationMinutes);
+
+    // Notify the requester (User A) that their request was accepted
+    const accepterName = `${request.matched_user.first_name} ${request.matched_user.last_name}`;
+    this.gateway.sendToUser(request.requester_id, 'session_accepted', {
+      session_id: session.id,
+      planned_duration_minutes: plannedDurationMinutes ?? null,
+      partner: {
+        id: request.matched_user_id,
+        name: accepterName,
+      },
+      session_type: sessionType,
+    });
 
     return {
       request_id: request.id,
@@ -826,10 +882,11 @@ export class MatchingService {
       },
       matched_user: {
         id: request.matched_user.id,
-        name: `${request.matched_user.first_name} ${request.matched_user.last_name}`,
+        name: accepterName,
         email: request.matched_user.email,
       },
       session_type: sessionType,
+      planned_duration_minutes: plannedDurationMinutes ?? null,
       message: 'Match accepted! Session starting...',
     };
   }
@@ -869,37 +926,46 @@ export class MatchingService {
   private async createConversationSession(
     request: ConversationRequest,
     sessionType: string,
+    plannedDurationMinutes?: number,
   ): Promise<ConversationSession> {
     console.log(
       `🎯 Creating session between ${request.requester_id} and ${request.matched_user_id}`,
     );
 
-    // Determine language for user 2
-    // (User 2 is learning the same language as User 1)
     const user2Language = request.matched_language_id;
 
-    // Get a language that user 2 is native in or learning
-    // For now, we'll use the same language (both learning same language)
     const session = this.conversationSessionRepo.create({
       conversation_request_id: request.id,
       user_1_id: request.requester_id,
       user_2_id: request.matched_user_id,
-      language_1_id: request.requester_language_id, // User 1 learning
-      language_2_id: user2Language, // User 2 learning
+      language_1_id: request.requester_language_id,
+      language_2_id: user2Language,
       session_type: sessionType,
-      status: 'waiting', // Waiting for both to be ready
+      status: 'waiting',
+      ...(plannedDurationMinutes ? { planned_duration_minutes: plannedDurationMinutes } : {}),
     });
 
     const savedSession = await this.conversationSessionRepo.save(session);
 
-    // Award XP for accepting
-    await this.awardXPForAction(request.matched_user_id, 20, 'accepted_match');
+    // Create the Conversation record so the messaging layer can find it
+    const conversation = this.conversationRepo.create({
+      session_id: savedSession.id,
+      user_1_id: request.requester_id,
+      user_2_id: request.matched_user_id,
+      language_id: request.requester_language_id,
+      type: (sessionType as ConversationType) ?? ConversationType.TEXT,
+      status: 'active',
+    });
+    await this.conversationRepo.save(conversation);
+
+    // Award XP for accepting (matched_user practices matched_language_id in this session)
+    await this.awardXPForAction(request.matched_user_id, request.matched_language_id, 20, 'accepted_match');
 
     return savedSession;
   }
 
   // 🔥 START CONVERSATION SESSION
-  async startSession(userId: number, sessionId: number) {
+  async startSession(userId: number, sessionId: number, plannedDurationMinutes?: number) {
     console.log(`🚀 Starting session ${sessionId}`);
 
     const session = await this.conversationSessionRepo.findOne({
@@ -910,17 +976,30 @@ export class MatchingService {
       throw new NotFoundException('Session not found');
     }
 
-    // Verify user is part of this session
     if (session.user_1_id !== userId && session.user_2_id !== userId) {
       throw new BadRequestException('You are not part of this session');
     }
 
+    // Idempotent: if already active, return current state so both users can call safely
+    if (session.status === 'active') {
+      return {
+        session_id: session.id,
+        status: 'active',
+        started_at: session.started_at,
+        planned_duration_minutes: session.planned_duration_minutes,
+        message: 'Session already active',
+      };
+    }
+
     if (session.status !== 'waiting') {
-      throw new BadRequestException('This session has already started');
+      throw new BadRequestException('This session cannot be started');
     }
 
     session.status = 'active';
     session.started_at = new Date();
+    if (plannedDurationMinutes) {
+      session.planned_duration_minutes = plannedDurationMinutes;
+    }
 
     await this.conversationSessionRepo.save(session);
 
@@ -928,6 +1007,7 @@ export class MatchingService {
       session_id: session.id,
       status: 'active',
       started_at: session.started_at,
+      planned_duration_minutes: session.planned_duration_minutes,
       message: 'Conversation started!',
     };
   }
@@ -960,11 +1040,12 @@ export class MatchingService {
 
     await this.conversationSessionRepo.save(session);
 
-    // Award XP for conversation
-    const xpEarned = Math.ceil(session.duration_seconds / 60) * 5; // 5 XP per minute
+    // Award XP for conversation (5 XP per minute, capped at 200)
+    const xpEarned = Math.min(Math.ceil(session.duration_seconds / 60) * 5, 200);
     await this.awardXPForAction(
       userId,
-      Math.min(xpEarned, 200),
+      this.sessionLanguageIdForUser(session, userId),
+      xpEarned,
       'conversation_completed',
     );
 
@@ -972,7 +1053,7 @@ export class MatchingService {
       session_id: session.id,
       status: 'completed',
       duration_minutes: Math.floor(session.duration_seconds / 60),
-      xp_earned: Math.min(xpEarned, 200),
+      xp_earned: xpEarned,
       message: 'Conversation ended. Great job!',
     };
   }
@@ -1036,14 +1117,56 @@ export class MatchingService {
 
     await this.ratingRepo.save(rating);
 
-    // Award bonus XP for rating
-    await this.awardXPForAction(raterUserId, 10, 'left_rating');
+    // Award bonus XP for leaving a rating
+    const xpEarned = 10;
+    await this.awardXPForAction(
+      raterUserId,
+      this.sessionLanguageIdForUser(session, raterUserId),
+      xpEarned,
+      'left_rating',
+    );
 
     return {
       rating_id: rating.id,
       rated_user_id: ratedUserId,
       overall_score: ratingData.overall_score,
+      xp_earned: xpEarned,
       message: 'Thank you for rating!',
+    };
+  }
+
+  // 🔥 GET RATINGS RECEIVED BY A USER (for the "My Reviews" screen)
+  async getUserRatings(userId: number, limit = 50, offset = 0) {
+    const [ratings, total] = await this.ratingRepo.findAndCount({
+      where: { rated_user_id: userId },
+      relations: ['rater'],
+      order: { created_at: 'DESC' },
+      take: limit,
+      skip: offset,
+    });
+
+    const average =
+      ratings.length === 0
+        ? 0
+        : ratings.reduce((sum, r) => sum + r.overall_score, 0) / ratings.length;
+
+    return {
+      total,
+      limit,
+      offset,
+      average_rating: Math.round(average * 10) / 10,
+      reviews: ratings.map((r) => ({
+        id: r.id,
+        rater: r.rater
+          ? { id: r.rater.id, name: `${r.rater.first_name} ${r.rater.last_name}`.trim() }
+          : null,
+        overall_score: r.overall_score,
+        communication_score: r.communication_score,
+        helpfulness_score: r.helpfulness_score,
+        patience_score: r.patience_score,
+        comment: r.comment ?? null,
+        created_at: r.created_at,
+      })),
     };
   }
 
@@ -1103,7 +1226,7 @@ export class MatchingService {
     };
   }
 
-  // 🔥 CANCEL CONVERSATION REQUEST
+  // 🔥 CANCEL CONVERSATION REQUEST (or active search)
   async cancelRequest(userId: number, requestId: number) {
     console.log(`🚫 Canceling request ${requestId}`);
 
@@ -1119,11 +1242,12 @@ export class MatchingService {
       throw new BadRequestException('You cannot cancel this request');
     }
 
-    if (request.status !== 'pending') {
+    if (!['pending', 'searching'].includes(request.status)) {
       throw new BadRequestException('This request cannot be cancelled');
     }
 
     request.status = 'expired';
+    request.expired_at = new Date();
     await this.conversationRequestRepo.save(request);
 
     return {
@@ -1133,14 +1257,177 @@ export class MatchingService {
     };
   }
 
-  // Helper: Award XP
-  private async awardXPForAction(userId: number, xp: number, action: string) {
-    try {
-      // TODO: Update user XP in user_language_progress table
-      console.log(`🎁 Awarded ${xp} XP to user ${userId} for ${action}`);
-    } catch (error) {
-      console.error('Error awarding XP:', error);
+  // 🔥 CASE 0: ACTIVE SEARCH — checks the live pool first, creates session instantly on match
+  async initiateActiveSearch(userId: number, languageId: number, timeoutSeconds: number = 600) {
+    // Reject if user already has an active session
+    const activeSession = await this.conversationSessionRepo.findOne({
+      where: [
+        { user_1_id: userId, status: In(['waiting', 'active']) },
+        { user_2_id: userId, status: In(['waiting', 'active']) },
+      ],
+    });
+
+    if (activeSession) {
+      throw new BadRequestException('You already have an active conversation session');
     }
+
+    const blockedUsers = await this.getBlockedUsers(userId);
+
+    const requesterExchangeProgress = await this.findBestExchangeLanguageForUser(userId, languageId);
+
+    if (!requesterExchangeProgress) {
+      throw new BadRequestException(
+        'Add at least one native or fluent language before searching for an exchange partner.',
+      );
+    }
+
+    // Only scan the active search pool (not passive profiles — those users haven't indicated readiness)
+    const activePoolCandidates = await this.getActiveSearchCandidates(
+      userId,
+      languageId,
+      requesterExchangeProgress.language_id,
+      blockedUsers,
+    );
+
+    if (activePoolCandidates.length === 0) {
+      // No one in the pool yet — add this user and wait
+      return this.createOpenSearchRequest(userId, languageId, 'learner', true, timeoutSeconds);
+    }
+
+    const requesterLearningProgress = await this.progressRepo.findOne({
+      where: { user_id: userId, language_id: languageId },
+      relations: ['user'],
+    });
+
+    if (!requesterLearningProgress) {
+      throw new NotFoundException('Learning language progress not found');
+    }
+
+    const requesterPrefs = await this.matchingPrefRepo.findOne({ where: { user_id: userId } });
+
+    const scores = await Promise.all(
+      activePoolCandidates.map((candidate) =>
+        this.calculateCompatibilityScore(
+          requesterLearningProgress,
+          requesterExchangeProgress,
+          candidate,
+          'learner',
+          requesterPrefs,
+        ),
+      ),
+    );
+
+    scores.sort((a, b) => b.compatibility_score - a.compatibility_score);
+    const bestMatch = scores[0];
+
+    if (bestMatch.active_request_id) {
+      return this.claimActiveSearchRequest(userId, bestMatch);
+    }
+
+    // Fallback: no claimable request found, add to pool
+    return this.createOpenSearchRequest(userId, languageId, 'learner', true, timeoutSeconds);
+  }
+
+  // 🔥 POLL SEARCH STATUS — for User A to check if they were matched while waiting
+  async getSearchStatus(userId: number, requestId: number) {
+    const request = await this.conversationRequestRepo.findOne({
+      where: { id: requestId, requester_id: userId },
+    });
+
+    if (!request) {
+      throw new NotFoundException('Search request not found');
+    }
+
+    // Auto-expire if timeout has passed
+    if (
+      request.status === 'searching' &&
+      request.active_search_timeout &&
+      request.active_search_timeout < new Date()
+    ) {
+      request.status = 'expired';
+      request.expired_at = new Date();
+      await this.conversationRequestRepo.save(request);
+
+      return { status: 'expired', request_id: requestId, message: 'Search timed out. Please try again.' };
+    }
+
+    if (request.status === 'matched') {
+      const session = await this.conversationSessionRepo.findOne({
+        where: { conversation_request_id: requestId },
+        relations: ['user_1', 'user_2'],
+      });
+
+      const matchedUser = session?.user_1_id === userId ? session?.user_2 : session?.user_1;
+
+      return {
+        status: 'matched',
+        request_id: requestId,
+        session_id: session?.id ?? null,
+        matched_user: matchedUser
+          ? { id: matchedUser.id, name: `${matchedUser.first_name} ${matchedUser.last_name}` }
+          : null,
+        message: 'Match found! Your conversation session has started.',
+        can_start_messaging: true,
+      };
+    }
+
+    const timeoutIn = request.active_search_timeout
+      ? Math.max(0, Math.floor((request.active_search_timeout.getTime() - Date.now()) / 1000))
+      : null;
+
+    return {
+      status: request.status,
+      request_id: requestId,
+      message: 'Still searching for your match...',
+      search_timeout_in: timeoutIn,
+    };
+  }
+
+  // 🔥 Award XP — persists to user_language_progress (xp, conversation count, streak)
+  private async awardXPForAction(
+    userId: number,
+    languageId: number,
+    xp: number,
+    action: 'accepted_match' | 'conversation_completed' | 'left_rating',
+  ): Promise<void> {
+    const progress = await this.progressRepo.findOne({
+      where: { user_id: userId, language_id: languageId },
+    });
+
+    if (!progress) {
+      console.warn(`⚠️ No language progress for user ${userId} / language ${languageId} — XP not awarded`);
+      return;
+    }
+
+    progress.xp_points += xp;
+
+    if (action === 'conversation_completed') {
+      progress.conversation_count += 1;
+      this.bumpStreak(progress);
+    }
+
+    await this.progressRepo.save(progress);
+    console.log(`🎁 Awarded ${xp} XP to user ${userId} (language ${languageId}) for ${action}`);
+  }
+
+  // Helper: advance the daily streak counter at most once per calendar day
+  private bumpStreak(progress: UserLanguageProgress): void {
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const lastStr = progress.last_activity_date
+      ? new Date(progress.last_activity_date).toISOString().slice(0, 10)
+      : null;
+
+    if (lastStr === todayStr) return; // already counted today
+
+    const yesterdayStr = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+    progress.current_streak_days = lastStr === yesterdayStr ? progress.current_streak_days + 1 : 1;
+    progress.longest_streak_days = Math.max(progress.longest_streak_days, progress.current_streak_days);
+    progress.last_activity_date = todayStr as unknown as Date;
+  }
+
+  // Helper: which language a session participant is practicing in that session
+  private sessionLanguageIdForUser(session: ConversationSession, userId: number): number {
+    return session.user_1_id === userId ? session.language_1_id : session.language_2_id;
   }
 
   // Get user's conversation history

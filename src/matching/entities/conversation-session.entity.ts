@@ -68,6 +68,9 @@ export class ConversationSession {
   @Column({ type: 'int', nullable: true })
   duration_seconds: number;
 
+  @Column({ type: 'int', nullable: true })
+  planned_duration_minutes: number;
+
   @Column({ type: 'int', default: 0 })
   message_count: number;
 

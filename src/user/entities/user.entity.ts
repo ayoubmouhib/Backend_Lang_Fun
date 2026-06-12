@@ -40,6 +40,9 @@ export class User {
   @Column({ type: 'int', nullable: true })
   age: number;
 
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  profile_picture: string | null;
+
   @Column({ type: 'boolean', default: false })
   email_verified: boolean;
 

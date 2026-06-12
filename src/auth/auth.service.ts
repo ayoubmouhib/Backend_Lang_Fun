@@ -8,13 +8,10 @@ import { LoginDto } from './dtos/login.dto';
 import { JwtService } from '@nestjs/jwt';
 import { RefreshToken } from './entities/refresh-token.entity';
 import { v4 as uuidv4 } from "uuid";
-import { RefreshTokenDto } from './dtos/refresh.dto';
-import { ChangePasswordDto } from './dtos/changePassword.dto';
 import { nanoid } from 'nanoid';
 import { ResetToken } from './entities/reset-token.entity';
 import { EmailVerification } from './entities/email-verification.entity';
 import { MailService } from 'src/services/mail.service';
-import { MoreThan } from 'typeorm';
 import { RandomNumber } from './entities/random-number-verification.entity';
 import { Interest } from './entities/interest.entity';
 import { Language } from 'src/languages/entities/language.entity';
@@ -27,8 +24,6 @@ export class AuthService {
     constructor(
         @InjectRepository(User)
         private usersRepository: Repository<User>,
-        @InjectRepository(Interest)
-        private interestsRepository: Repository<Interest>,
         @InjectRepository(RefreshToken)
         private tokenRepository: Repository<RefreshToken>,
         @InjectRepository(ResetToken)
@@ -37,10 +32,6 @@ export class AuthService {
         private emailVerificationRepository: Repository<EmailVerification>,
         @InjectRepository(RandomNumber)
         private randomNumberRepository: Repository<RandomNumber>,
-        @InjectRepository(Language)
-        private languagesRepository: Repository<Language>,
-        @InjectRepository(UserLanguageProgress)
-        private progressRepository: Repository<UserLanguageProgress>,
         private jwtService: JwtService,
         private mailService: MailService,
         private dataSource: DataSource,
@@ -347,24 +338,6 @@ export class AuthService {
       await queryRunner.manager.save(progressEntries);
     }
 
-    // Generate JWT tokens
-    const accessToken = this.jwtService.sign(
-      { userId: savedUser.id, email: savedUser.email },
-      { expiresIn: '24h' },
-    );
-    const refreshToken = this.jwtService.sign(
-      { userId: savedUser.id, email: savedUser.email },
-      { expiresIn: '7d' },
-    );
-
-    // Save refresh token
-    const refreshTokenEntity = queryRunner.manager.create(RefreshToken, {
-      user_id: savedUser.id,
-      token_hash: refreshToken,
-      expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-    });
-    await queryRunner.manager.save(refreshTokenEntity);
-
     // 🔥 Generate email verification token (BEFORE commit)
     const verificationToken = nanoid(64);
     const expiryDate = new Date();
@@ -382,6 +355,10 @@ export class AuthService {
     // 🔥 COMMIT ONLY ONCE - AT THE END!
     await queryRunner.commitTransaction();
 
+    // Generate tokens AFTER commit so the refresh token is properly stored
+    // generateUserTokens uses UUID refresh (bcrypt-hashed) — compatible with refreshTokens()
+    const tokens = await this.generateUserTokens(savedUser.id);
+
     // 🔥 Send email AFTER successful commit (outside transaction)
     try {
       await this.mailService.sendVerificationEmail(email, verificationToken);
@@ -390,7 +367,12 @@ export class AuthService {
       // Don't fail signup if email fails, but log it
     }
 
-    return { message: 'Registration successful! Please check your email to verify your account.' };
+    return {
+      message: 'Registration successful! Please check your email to verify your account.',
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      userId: savedUser.id,
+    };
   } catch (error) {
     // Rollback transaction on any error
     await queryRunner.rollbackTransaction();
@@ -535,18 +517,21 @@ export class AuthService {
 
     }
 
-    async generateUserTokens(userId) {
-        const accessToken = this.jwtService.sign({ userId }, { expiresIn: '1h' });
+    async generateUserTokens(userId: number) {
+        const user = await this.usersRepository.findOneBy({ id: userId });
+        const accessToken = this.jwtService.sign(
+            { userId, email: user?.email },
+            { expiresIn: '1h' },
+        );
         const refreshToken = uuidv4();
         this.storeRefreshToken(refreshToken, userId);
         return {
             accessToken,
             refreshToken,
         };
-
     }
 
-    async storeRefreshToken(token: string, userId) {
+    async storeRefreshToken(token: string, userId: number) {
         const expiryDate = new Date();
         expiryDate.setDate(expiryDate.getDate() + 3);
         const salt = await bcrypt.genSalt(10);
@@ -590,7 +575,7 @@ export class AuthService {
         return this.generateUserTokens(matchedToken.user_id);
     }
 
-    async changePassword(userId, oldPassword: string, newPassword: string) {
+    async changePassword(userId: number, oldPassword: string, newPassword: string) {
         // Find The User and explicitly select the password
         const user = await this.usersRepository.createQueryBuilder('user')
             .addSelect('user.password')
@@ -627,14 +612,14 @@ export class AuthService {
             expiryDate.setDate(expiryDate.getDate() + 3);
             const salt = await bcrypt.genSalt(10);
             const hashToken = await bcrypt.hash(resetToken, salt);
-            const newToken = await this.tokenResetRepository.create({
+            const newToken = this.tokenResetRepository.create({
                 token_hash: hashToken,
                 user_id: user.id,
                 expires_at: expiryDate
             });
             await this.tokenResetRepository.save(newToken);
             const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
-            const generatedCode = await this.randomNumberRepository.create({
+            const generatedCode = this.randomNumberRepository.create({
                 code_randaom: otpCode,
                 user_id: user.id,
                 expires_at: new Date(Date.now() + 5 * 60 * 1000)

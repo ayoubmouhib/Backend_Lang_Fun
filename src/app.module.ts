@@ -1,4 +1,5 @@
-import { Module } from '@nestjs/common';
+import { Module, OnModuleInit } from '@nestjs/common';
+import { seedQuizContent } from './seeds/quiz-content.seed';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
@@ -20,11 +21,14 @@ import { InterestsModule } from './interests/interests.module';
 import { UserLanguageProgress } from './user/entities/user-language-progress.entity';
 import { UserLanguage } from './user/entities/user-language.entity';
 import { QuizModule } from './quiz/quiz.module';
+import { GamesModule } from './games/games.module';
 import { QuizResult } from './quiz/entities/quiz-result.entity';
 import { QuizInstance } from './quiz/entities/quiz-instance.entity';
 import { QuizTemplate } from './quiz/entities/quiz-template.entity';
 import { QuizUserAnswer } from './quiz/entities/quiz-user-answer.entity';
 import { QuizQuestionsBank } from './quiz/entities/quiz-questions-bank.entity';
+import { GameWord } from './games/entities/game-word.entity';
+import { GameSession } from './games/entities/game-session.entity';
 import { MatchingModule } from './matching/matching.module';
 
 // 🔥 ADD THESE MATCHING ENTITIES
@@ -33,6 +37,14 @@ import { ConversationSession } from './matching/entities/conversation-session.en
 import { MatchingPreference } from './matching/entities/matching-preference.entity';
 import { UserRating } from './matching/entities/user-rating.entity';
 import { BlockedUser } from './matching/entities/blocked-user.entity';
+import { ConversationModule } from './conversation/conversation.module';
+import { Conversation } from './conversation/entities/conversation.entity';
+import { ConversationCall } from './conversation/entities/conversation-call.entity';
+import { Message } from './conversation/entities/message.entity';
+import { GatewayModule } from './gateway/gateway.module';
+import { FollowsModule } from './follows/follows.module';
+import { UserFollow } from './follows/entities/user-follow.entity';
+import { VocabularyModule } from './vocabulary/vocabulary.module';
 
 @Module({
   imports: [
@@ -60,12 +72,17 @@ import { BlockedUser } from './matching/entities/blocked-user.entity';
         QuizTemplate,
         QuizUserAnswer,
         QuizQuestionsBank,
-        ConversationRequest, 
+        GameWord,
+        GameSession,
+        ConversationRequest,
         ConversationSession, 
         MatchingPreference, 
         UserRating, 
         BlockedUser,
-
+        Message,
+        ConversationCall,
+        Conversation,
+        UserFollow,
       ],
       synchronize: true, // is good for development but NEVER use it in production as it can drop/recreate tables and lose data!
       logging: true, // Optional: to see SQL queries
@@ -76,7 +93,11 @@ import { BlockedUser } from './matching/entities/blocked-user.entity';
     LanguagesModule,
     AuthModule,
     QuizModule,
-    MatchingModule, // Already here
+    GamesModule,
+    MatchingModule,
+    ConversationModule,
+    FollowsModule,
+    VocabularyModule,
     ConfigModule.forRoot({
       isGlobal: true,
       cache: true,
@@ -91,10 +112,15 @@ import { BlockedUser } from './matching/entities/blocked-user.entity';
       inject: [ConfigService],
     }),
     InterestsModule,
+    GatewayModule,
   ],
   controllers: [AppController],
   providers: [AppService],
 })
-export class AppModule {
+export class AppModule implements OnModuleInit {
   constructor(private dataSource: DataSource) {}
+
+  async onModuleInit() {
+    await seedQuizContent(this.dataSource);
+  }
 }
