@@ -73,8 +73,8 @@ export class QuizService {
 
   // 🔥 2. Create quiz instance
   async createQuizInstance(userId: number, templateId: number, languageId: number) {
-    const template = await this.quizTemplateRepo.findOne({ 
-      where: { id: templateId } 
+    const template = await this.quizTemplateRepo.findOne({
+      where: { id: templateId }
     });
 
     if (!template) {
@@ -89,7 +89,7 @@ export class QuizService {
       throw new NotFoundException('User language progress not found');
     }
 
-    const levelBefore = userProgress.level_verified 
+    const levelBefore = userProgress.level_verified
       ? `${userProgress.cefr_level}.${userProgress.sub_level}`
       : userProgress.initial_level;
 
@@ -101,19 +101,21 @@ export class QuizService {
       language_id: languageId,
       selected_questions: selectedQuestions,
       level_before: levelBefore,
-      status: QuizStatus.NOT_STARTED // 🔥 FIX: Use enum instead of string
+      status: QuizStatus.NOT_STARTED,
     });
 
     await this.quizInstanceRepo.save(instance);
 
+    const questions = await this.getQuestionsForInstance(instance.id);
+
     return {
-      quiz_instance_id: instance.id,
-      title: template.title,
-      description: template.description,
-      total_questions: template.total_questions,
+      quiz_instance_id:   instance.id,
+      title:              template.title,
+      description:        template.description,
+      total_questions:    questions.length,   // actual count, not template default
       time_limit_minutes: template.time_limit_minutes,
-      xp_reward: template.xp_reward_base,
-      questions: await this.getQuestionsForInstance(instance.id)
+      xp_reward:          template.xp_reward_base,
+      questions,
     };
   }
 
@@ -230,16 +232,24 @@ export class QuizService {
   }
 
   private checkAnswer(question: QuizQuestionsBank, userAnswer: string): boolean {
-    if (!userAnswer) return false; // 🔥 FIX: Handle empty answer
-    
-    const normalizedUserAnswer = userAnswer.toLowerCase().trim();
-    
+    if (!userAnswer) return false;
+
+    // Strip trailing punctuation and collapse internal whitespace so minor
+    // differences in translation phrasing do not mark a correct answer wrong.
+    const normalize = (s: string) =>
+      s.toLowerCase()
+       .trim()
+       .replace(/[.,!?;:…]+$/g, '')   // remove trailing punctuation
+       .replace(/\s+/g, ' ');          // collapse whitespace
+
+    const normalizedUser = normalize(userAnswer);
+
     const correctAnswers = [
-      question.correct_answer.toLowerCase().trim(),
-      ...(question.alternative_answers || []).map(a => a.toLowerCase().trim())
+      normalize(question.correct_answer),
+      ...(question.alternative_answers || []).map(normalize),
     ];
 
-    return correctAnswers.includes(normalizedUserAnswer);
+    return correctAnswers.includes(normalizedUser);
   }
 
   // 🔥 6. Complete quiz
@@ -559,20 +569,22 @@ async getUserQuizHistory(userId: number, languageId: number) {
       where: { id: quizInstanceId },
       relations: ['template'],
     });
-    
+
     if (!instance) {
       throw new NotFoundException('Quiz instance not found');
     }
-    
+
     const questions = await this.getQuestionsForInstance(quizInstanceId);
-    
+
     return {
-      quiz_instance_id: instance.id,
-      status: instance.status,
-      title: instance.template?.title || '',
-      total_questions: instance.template?.total_questions || 0,
+      quiz_instance_id:   instance.id,
+      status:             instance.status,
+      title:              instance.template?.title || '',
+      description:        instance.template?.description || null,
+      total_questions:    questions.length,   // actual count
       time_limit_minutes: instance.template?.time_limit_minutes || 0,
-      questions: questions,
+      xp_reward:          instance.template?.xp_reward_base || 50,
+      questions,
     };
   }
 
@@ -593,19 +605,38 @@ async getUserQuizHistory(userId: number, languageId: number) {
     
     const orderedQuestions = instance.selected_questions.map(selected => {
       const question = questions.find(q => q.id === selected.question_id);
-      if (!question) return null; // 🔥 FIX: Handle missing question
-      
+      if (!question) return null;
+
+      const isTranslation =
+        question.question_type === QuestionType.TRANSLATION_TO_TARGET ||
+        question.question_type === QuestionType.TRANSLATION_TO_NATIVE;
+
+      // For true/false questions with no stored options, supply them here
+      const resolvedOptions =
+        question.question_type === QuestionType.TRUE_FALSE
+          ? ['True', 'False']
+          : question.question_type === QuestionType.MULTIPLE_CHOICE
+          ? question.options ?? null
+          : null;
+
       return {
-        order: selected.order,
-        question_id: question.id,
-        question_text: question.question_text,
-        question_type: question.question_type,
-        options: question.question_type === QuestionType.MULTIPLE_CHOICE ? question.options : null,
-        correct_answer: question.question_type === QuestionType.MULTIPLE_CHOICE ? question.correct_answer : null,
-        skill_category: question.skill_category,
+        order:             selected.order,
+        question_id:       question.id,
+        question_text:     question.question_text,
+        question_type:     question.question_type,
+        options:           resolvedOptions,
+        skill_category:    question.skill_category,
         target_cefr_level: question.target_cefr_level,
+        // Translation-specific fields
+        source_sentence:   isTranslation ? (question.source_sentence ?? null) : null,
+        source_language:   isTranslation ? (question.source_language ?? null) : null,
+        target_language:   isTranslation ? (question.target_language ?? null) : null,
+        // Hint shown to the user for any question type
+        hint:              question.hint ?? null,
+        // Explanation always returned so feedback banner can show it immediately
+        explanation:       question.explanation ?? null,
       };
-    }).filter(q => q !== null); // 🔥 FIX: Remove nulls
+    }).filter(q => q !== null);
 
     return orderedQuestions;
   }

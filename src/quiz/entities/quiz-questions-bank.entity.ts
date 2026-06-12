@@ -4,19 +4,22 @@ import { Language } from '../../languages/entities/language.entity';
 import { QuizUserAnswer } from './quiz-user-answer.entity';
 
 export enum QuestionType {
-  MULTIPLE_CHOICE = 'multiple_choice',
-  FILL_BLANK = 'fill_blank',
-  TRUE_FALSE = 'true_false',
-  WORD_ORDER = 'word_order',
-  MATCHING = 'matching',
+  MULTIPLE_CHOICE      = 'multiple_choice',
+  FILL_BLANK           = 'fill_blank',
+  TRUE_FALSE           = 'true_false',
+  WORD_ORDER           = 'word_order',
+  MATCHING             = 'matching',
+  TRANSLATION_TO_TARGET = 'translation_to_target', // native → target language
+  TRANSLATION_TO_NATIVE = 'translation_to_native', // target language → native
 }
 
 export enum SkillCategory {
-  GRAMMAR = 'grammar',
-  VOCABULARY = 'vocabulary',
-  READING = 'reading',
-  LISTENING = 'listening',
-  WRITING = 'writing',
+  GRAMMAR     = 'grammar',
+  VOCABULARY  = 'vocabulary',
+  READING     = 'reading',
+  LISTENING   = 'listening',
+  WRITING     = 'writing',
+  TRANSLATION = 'translation',
 }
 
 export enum CEFRLevel {
@@ -64,6 +67,15 @@ export class QuizQuestionsBank {
 
   @Column({ type: 'text', nullable: true })
   hint!: string;
+
+  @Column({ type: 'text', nullable: true })
+  source_sentence!: string;      // sentence to translate (translation types)
+
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  source_language!: string;      // display name of the source language, e.g. "English"
+
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  target_language!: string;      // display name of the target language, e.g. "French"
 
   @Column({
     type: 'enum',

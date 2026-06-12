@@ -1,4 +1,4 @@
-import { IsInt, IsEnum, IsNotEmpty } from 'class-validator';
+import { IsInt, IsEnum, IsNotEmpty, IsOptional } from 'class-validator';
 import { ProficiencyLevel } from '../entities/user-language.entity';
 
 
@@ -13,4 +13,8 @@ export class UserLanguageDto {
   })
   @IsNotEmpty()
   level: ProficiencyLevel;
+
+  @IsEnum(['learning', 'native', 'fluent'])
+  @IsOptional()
+  user_type?: 'learning' | 'native' | 'fluent'; 
 }

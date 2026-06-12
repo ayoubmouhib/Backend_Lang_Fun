@@ -1,4 +1,4 @@
-import { ArrayMaxSize, ArrayMinSize, IsArray, IsEmail, IsInt, IsOptional, IsString, Matches, MaxLength, Min, MinLength, ValidateNested } from "class-validator";
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsEmail, IsInt, IsOptional, IsString, MaxLength, Min, MinLength, ValidateNested } from "class-validator";
 import { UserLanguageDto } from "src/user/dto/user-language.dto";
 import { Type } from 'class-transformer';
 
@@ -26,6 +26,7 @@ export class SignupDto {
     //@Matches(/^(?=.* [0-9])/, {message: 'Password Must Contain at least One Number'})
     password: string;
 
+    @IsOptional()
     @IsInt()
     @Min(12)
     age?: number;
